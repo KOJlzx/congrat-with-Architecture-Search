@@ -1,0 +1,31 @@
+Metadata-Version: 2.4
+Name: clip_graph
+Version: 0.0.1
+Summary: CLIP for graphs
+Home-page: https://github.com/wwbrannon/clip-graph
+Author: William Brannon
+Author-email: wbrannon@mit.edu
+License: MIT
+Description-Content-Type: text/markdown
+Provides-Extra: dev
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: pylint; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+
+ConGraT
+---
+
+This repo contains code for the paper [ConGraT: Self-Supervised Contrastive
+Pretraining for Joint Graph and Text
+Embeddings](https://arxiv.org/abs/2305.14321).
+
+For our updated Pubmed dataset and scripts, see [this
+repo](https://github.com/mit-ccc/pubmed-dataset).
+
+**What we're trying to do**: We want to learn a single model of the joint
+distribution of text and a graph structure, where the graph is over the entities
+generating the text. (This latter condition is what distinguishes our case from
+models using knowledge graphs.) This problem occurs in a variety of settings:
+the follow graph among users who post tweets, link graphs between web pages,
+citation networks for academic articles, etc. We view it as a kind of multimodal
+learning, allowing models to leverage graph data that co-occurs with texts.

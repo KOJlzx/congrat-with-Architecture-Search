@@ -7,8 +7,6 @@ from .datamodule import (
     TextDataModule,
     GraphDataModule,
     GraphTextDataModule,
-    TwitterGraphDataModule,
-    TwitterGraphTextDataModule,
 )
 
 from .dataset import (

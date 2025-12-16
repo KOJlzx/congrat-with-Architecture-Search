@@ -1,0 +1,8 @@
+# Ray results
+ray_results/clip_graph_ray/
+
+# Lightning logs
+lightning_logs/
+
+# Model checkpoints and saved models
+*.pth

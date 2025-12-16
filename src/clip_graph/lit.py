@@ -85,9 +85,9 @@ class LitBase(ABC, pl.LightningModule):
         elif model_file is not None:
             if isinstance(model_file, str):
                 with open(model_file, 'rb') as f:
-                    self.model = torch.load(f)
+                    self.model = torch.load(f, weights_only=True)
             elif isinstance(model_file, io.IOBase):
-                self.model = torch.load(model_file)
+                self.model = torch.load(model_file, weights_only=True)
             else:
                 raise ValueError('model_file must be str or file-like')
         else:  # model_class_name is not None
@@ -603,7 +603,19 @@ class LitClipGraph(LitBase):
         #([17145742, 12651051,  9787347, 12513038], device='cuda:0')
         # print(logits.shape)
         #[4, 4]
-        # print(batch['graph_sim_mutual'].shape)
+        # {
+        #     # 文本数据（已批处理）
+        #     'text_node_ids': tensor([101, 102, 103]),
+        #     'input_ids': tensor([...]),  # shape: [3, max_len]
+        #     'attention_mask': tensor([...]),  # shape: [3, max_len]
+        #     'labels': tensor([...]),
+        #     'text': ['This paper discusses AI...', 'Machine learning methods...', 'Deep neural networks...'],
+            
+        #     # 图数据（共享，只存储一份）
+        #     'graph_edge_index': tensor([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]),     # shape: [3, 2]
+        #     'graph_x': tensor([[0, 1, 2], [1, 2, 0]]),          # shape: [2, 3]
+        #     'graph_node_ids': tensor([101, 102, 103])                    # shape: [3]
+        # }
         if self.sim_smoothing > 0:
             inds = (batch['text_node_ids'][:, None] == batch['graph_node_ids'])
             inds = inds.nonzero()[:, 1]

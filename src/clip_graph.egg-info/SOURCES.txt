@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+setup.cfg
+setup.py
+src/clip_graph.egg-info/PKG-INFO
+src/clip_graph.egg-info/SOURCES.txt
+src/clip_graph.egg-info/dependency_links.txt
+src/clip_graph.egg-info/requires.txt
+src/clip_graph.egg-info/top_level.txt
+src/clip_graph.egg-info/zip-safe

@@ -51,10 +51,10 @@ class EvalData:
         #data/embeds/test-text-u_wbrannon_github_clip-graph_lightning_logs_clip-graph_inductive-causal_pubmed_version_0.pt
         print("____", self.comp_nodes_file, self.trained_nodes_file, self.comp_texts_file, self.trained_texts_file)
         print("____", self.dataset_yaml_path, self.dataset_split)
-        self.comp_nodes = torch.load(comp_nodes_file, map_location='cpu')
-        self.trained_nodes = torch.load(trained_nodes_file, map_location='cpu')
-        self.comp_texts = torch.load(comp_texts_file, map_location='cpu')
-        self.trained_texts = torch.load(trained_texts_file, map_location='cpu')
+        self.comp_nodes = torch.load(comp_nodes_file, map_location='cpu', weights_only=True)
+        self.trained_nodes = torch.load(trained_nodes_file, map_location='cpu', weights_only=True)
+        self.comp_texts = torch.load(comp_texts_file, map_location='cpu', weights_only=True)
+        self.trained_texts = torch.load(trained_texts_file, map_location='cpu', weights_only=True)
 
         assert self.trained_nodes.shape[0] == self.comp_nodes.shape[0]
         assert self.trained_texts.shape[0] == self.comp_texts.shape[0]

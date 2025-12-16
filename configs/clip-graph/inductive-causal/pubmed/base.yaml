@@ -3,11 +3,11 @@ seed_everything: 2969591811
 data:
     class_path: clip_graph.data.datamodule.PubmedGraphTextDataModule
     init_args:
-        data_dir: 'data/pubmed'
+        data_dir: '/home/neulab/lizaixi/congrat-copy/data/pubmed'
         seed: ${seed_everything}
         mlm: false
         batch_size: 4
-        num_workers: 4
+        num_workers: 0
         pin_memory: true
 
         # should match what's used below for lm_name or fine-tuned checkpoint
@@ -15,7 +15,7 @@ data:
 
         transductive: false
         transductive_identity_features: false
-ckpt_path: lightning_logs/clip-graph/inductive-causal/pubmed/version_13/checkpoints/epoch=5-step=55122.ckpt
+# ckpt_path: lightning_logs/clip-graph/inductive-causal/pubmed/version_13/checkpoints/epoch=5-step=55122.ckpt
 model:
     class_path: clip_graph.lit.LitClipGraph
     init_args:
@@ -93,11 +93,15 @@ trainer:
     # Hardware selection
     #
 
-    num_nodes: 2
+    num_nodes: 1
     accelerator: 'gpu'
     devices: [0]
 
-    strategy: 'ddp_find_unused_parameters_false'
+    # strategy:
+    #     class_path: pytorch_lightning.strategies.DDPStrategy
+    #     init_args:
+    #         process_group_backend: 'nccl'
+    #         find_unused_parameters: false  # 对应原来的设置
 
 
     #

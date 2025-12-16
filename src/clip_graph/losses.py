@@ -33,7 +33,7 @@ def square_contrastive_loss(
     else:
         # label smoothing, but instead of the uniform distribution, use the
         # distribution based on similarity over nodes
-
+# 1 10 100 1000
         if sim_weights == 'identity':
             weights = torch.ones((N,), device=device)
         elif sim_weights == 'exp': #[1.0000, 0.6394, 0.4088, 0.2614, 0.1672]
@@ -54,7 +54,7 @@ def square_contrastive_loss(
         sims = sims.gather(1, sort_inds.argsort(1))
         # 按原顺序排回来
         row_reg_dist = sims - sims.min(dim=1).values.unsqueeze(1).expand(-1, N)
-        # 将sims的每一行减去改行的最小值
+        # 将sims的每一行减去该行的最小值
         row_reg_dist = F.normalize(row_reg_dist, p=1, dim=1)
         # l1 归一化
         col_reg_dist = sims.T - sims.T.min(dim=1).values.unsqueeze(1).expand(-1, N)

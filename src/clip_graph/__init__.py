@@ -10,8 +10,6 @@ from .data import (
     TextDataModule,
     GraphDataModule,
     GraphTextDataModule,
-    TwitterGraphDataModule,
-    TwitterGraphTextDataModule
 )
 
 from .data import (

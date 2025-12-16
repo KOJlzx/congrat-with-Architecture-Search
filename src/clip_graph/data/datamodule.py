@@ -35,6 +35,7 @@ from .dataset import (
 )
 
 from ..utils import _train_val_test_split
+import time
 
 #
 # Base data module functionality
@@ -111,10 +112,11 @@ class BaseDataModule(ABC, pl.LightningDataModule):
 
     def _dataloader(self, dataset: BaseDataset, **kwargs: Any
                    ) -> td.DataLoader:
+        print("in_dataloader", "-" * 50)
         return td.DataLoader(
             dataset,
-            batch_size = self.batch_size,
-            num_workers = self.num_workers,
+            batch_size = 1,
+            num_workers = 1,
             pin_memory = self.pin_memory,
             collate_fn = dataset.__collate__,  # *not* self.dataset
             **kwargs
@@ -142,13 +144,16 @@ class BaseDataModule(ABC, pl.LightningDataModule):
         if self._split_nodes is None:
             self.compute_split_nodes()
 
+        print('in_split_compute_split_nodes')
         self.post_compute_split_nodes_hook()
 
+        print('in_split_splits')
         splits = self.dataset.split(splits=self._split_nodes)
         self.train_dataset = splits['train']
         self.val_dataset = splits['val']
         self.test_dataset = splits['test']
-
+    
+        print('in_split_splits_train_dataset')
         self.post_split_hook()
 
         return self
@@ -234,9 +239,10 @@ class GraphDataModule(BaseDataModule):
             pickle.dump(graph_data, f)
 
     def _get_graph_object(self) -> Data:
+        print('in_get_graph_object')
         with open(self._graph_data_cache_path, 'rb') as f:
             ret = pickle.load(f)
-
+        print('in_get_graph_object_pickle_load')
         if not self.directed:
             if hasattr(ret, 'num_nodes'):
                 num_nodes = ret.num_nodes
@@ -284,7 +290,7 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
             "transductive_identity_features requires transductive = True"
 
         batch_size = kwargs.pop('batch_size', 32)
-
+        print('batch_size', batch_size)
         super().__init__(**kwargs)
 
         self.max_texts_per_node = max_texts_per_node
@@ -299,7 +305,7 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
 
         return self
 
-    def setup(self, stage: Optional[str] = None) -> "GraphTextDataModule":
+    def setup(self, node: int, world_size: int, k_hop: int = 1, include_self: bool = True, idx: Optional[int] = None, stage: Optional[str] = None) -> "GraphTextDataModule":
         self.dataset = GraphTextDataset(
             graph_data = self._get_graph_object(),
             drop_isolates = self.drop_isolates,
@@ -314,14 +320,25 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
             device = self.device,
         )
 
-        self.split()
+        print("in_setup_graph_text_dataset_extract_subgraph_with_texts")
+        total_samples = self.dataset.graph_data.node_ids.shape[0]
+        samples_per_shard = total_samples // world_size
+        start_idx = node * samples_per_shard
+        end_idx = start_idx + samples_per_shard if node < world_size - 1 else total_samples
+        node_mask = torch.zeros(total_samples, dtype=torch.bool)
+        node_mask[start_idx:end_idx] = True
 
+
+        self.dataset.extract_subgraph_with_texts(node_mask, k_hop, include_self)
+        print("in_setup_graph_text_dataset")
+        self.split()
+        print("in_setup_graph_text_dataset_split")
         # wrap the datasets in batching logic
         datasets = ['train_dataset', 'val_dataset', 'test_dataset']
         for dataset_name in datasets:
             dataset = getattr(self, dataset_name)
             dataset.compute_mutuals()
-
+            print('in_setup_graph_text_dataset_compute_mutuals')    
             dataset = BatchGraphTextDataset(
                 dataset,
                 batch_size = self._real_batch_size,
@@ -389,69 +406,6 @@ class SVDMixin:
         return self
 
 
-class TwitterDataMixin(SVDMixin):
-    svd_vectors_name = 'tsvd'
-
-    def prep_graph(self,
-        edgelist: pd.DataFrame,
-        node_data: pd.DataFrame
-    ) -> Data:
-        #
-        # Set up the nodes and edges
-        #
-
-        G = nx.from_pandas_edgelist(edgelist, create_using=nx.DiGraph)
-
-        # edgelists don't include isolates
-        isolates = node_data.loc[~node_data.node_id.isin(G.nodes), 'node_id']
-        for node in isolates.tolist():
-            G.add_node(node)
-
-        #
-        # Attributes from our user data
-        #
-
-        tmp = node_data.set_index('node_id')
-        tmp['node_ids'] = tmp.index.copy()
-        tmp = tmp.to_dict('index')
-        nx.set_node_attributes(G, tmp)
-
-        #
-        # LM embeddings of bio text on Twitter data
-        #
-
-        bios = [
-            bio if isinstance(bio, str) else 'No bio provided'
-            for bio in node_data['bio'].tolist()
-        ]
-
-        lm = st.SentenceTransformer('all-mpnet-base-v2').eval()
-
-        with torch.no_grad():
-            embeds = lm.encode(
-                bios,
-                convert_to_tensor=True,
-                normalize_embeddings=False,
-                output_value='sentence_embedding',
-                device=self.device,
-            ).detach().cpu()
-
-        ret = from_networkx(G)
-
-        # order of rows in the tensor attributes is not the same as in G.nodes
-        orig = torch.from_numpy(node_data['node_id'].to_numpy())
-        inds = (ret.node_ids[:, None] == orig).nonzero()[:, 1]
-
-        ret.x = embeds[inds, ...]
-
-        # this is normally a property, set as an attribute in from_networkx
-        # because it can't be inferred from the nonexistent x attribute. now
-        # that we've set x, we don't want this and it'll break downstream code
-        del ret.num_nodes
-
-        return ret
-
-
 class PubmedDataMixin(SVDMixin):
     svd_vectors_name = 'x'
 
@@ -478,98 +432,10 @@ class PubmedDataMixin(SVDMixin):
         return ret
 
 
-class CoraDataMixin(SVDMixin):
-    svd_vectors_name = 'x'
-
-    def prep_graph(self,
-        edgelist: pd.DataFrame,
-        node_data: pd.DataFrame
-    ) -> Data:
-        G = nx.from_pandas_edgelist(edgelist, create_using=nx.DiGraph)
-
-        # edgelists don't include isolates
-        isolates = node_data.loc[~node_data.node_id.isin(G.nodes), 'node_id']
-        for node in isolates.tolist():
-            G.add_node(node)
-
-        tmp = node_data[['node_id', 'orig_classif', 'cora_ml_classif']]
-        tmp = tmp.set_index('node_id')
-        tmp['node_ids'] = tmp.index.copy()
-
-        oc = pd.Categorical(tmp['orig_classif'])
-        orig_classif_codes = oc.categories.tolist()
-        tmp['orig_classif'] = oc.codes
-
-        cmc = pd.Categorical(tmp['cora_ml_classif'])
-        cora_ml_classif_codes = cmc.categories.tolist()
-        tmp['cora_ml_classif'] = cmc.codes
-
-        nx.set_node_attributes(G, tmp.to_dict('index'))
-
-        ret = from_networkx(G)
-        ret.orig_classif_codes = orig_classif_codes
-        ret.cora_ml_classif_codes = cora_ml_classif_codes
-
-        del ret.num_nodes
-
-        return ret
-
-
-class TRexDataMixin(SVDMixin):
-    svd_vectors_name = 'x'
-
-    def prep_graph(self,
-        edgelist: pd.DataFrame,
-        node_data: pd.DataFrame
-    ) -> Data:
-        G = nx.from_pandas_edgelist(edgelist, create_using=nx.DiGraph)
-
-        # edgelists don't include isolates
-        isolates = node_data.loc[~node_data.node_id.isin(G.nodes), 'node_id']
-        for node in isolates.tolist():
-            G.add_node(node)
-
-        node_data['num_categories'] = node_data.sum(axis=1)
-        tmp = node_data[['node_id', 'num_categories']].copy().set_index('node_id')
-        tmp['node_ids'] = tmp.index.copy()
-        tmp = tmp.to_dict('index')
-        nx.set_node_attributes(G, tmp)
-
-        ret = from_networkx(G)
-
-        # order of rows in the tensor attributes is not the same as in G.nodes
-        orig = torch.from_numpy(node_data['node_id'].to_numpy())
-        inds = (ret.node_ids[:, None] == orig).nonzero()[:, 1]
-
-        node_data = node_data.drop(['node_id', 'num_categories'], axis=1)
-
-        category_names = list(node_data.columns)
-        assert all(c.startswith('cat_') for c in category_names)
-        category_names = ['Q' + c.replace('cat_', '') for c in category_names]
-
-        node_data = torch.from_numpy(node_data.to_numpy())
-        node_data = node_data[inds, :]
-
-        ret.categories = node_data
-        ret.category_names = category_names
-
-        del ret.num_nodes
-
-        return ret
-
 
 #
 # Put the data mixins and the other classes together
 #
-
-
-class TwitterGraphDataModule(TwitterDataMixin, GraphDataModule):
-    pass
-
-
-class TwitterGraphTextDataModule(TwitterDataMixin, GraphTextDataModule):
-    pass
-
 
 class PubmedGraphDataModule(PubmedDataMixin, GraphDataModule):
     pass
@@ -578,18 +444,3 @@ class PubmedGraphDataModule(PubmedDataMixin, GraphDataModule):
 class PubmedGraphTextDataModule(PubmedDataMixin, GraphTextDataModule):
     pass
 
-
-class CoraGraphDataModule(CoraDataMixin, GraphDataModule):
-    pass
-
-
-class CoraGraphTextDataModule(CoraDataMixin, GraphTextDataModule):
-    pass
-
-
-class TRexGraphDataModule(TRexDataMixin, GraphDataModule):
-    pass
-
-
-class TRexGraphTextDataModule(TRexDataMixin, GraphTextDataModule):
-    pass

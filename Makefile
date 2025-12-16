@@ -13,21 +13,45 @@ clean:
 	find . -name tags          -not -path '*/\.git/*' -exec rm -f {} \+
 	find . -name tags.lock     -not -path '*/\.git/*' -exec rm -f {} \+
 
+#nc -zv 192.168.1.6 29500
+
 pretrain:
-	# @ set -e; \
-	# for c in configs/lm-pretrain/pubmed/causal.yaml; do \
-	# 	bin/trainer.py fit -c "$$c"; \
-	# done
+
+	set -e
+
+# ===== 多机训练配置 =====
+# export MASTER_ADDR="192.168.1.6"   # 主节点的 IP
+# export MASTER_PORT=29500       # 通信端口，保证所有节点一致
+# export NNODES=2                # 节点总数
+# export NPROC_PER_NODE=1        # 每个节点的 GPU 数量
+# export NODE_RANK=0             # 当前节点编号 (主节点=0，从节点=1,...)
+# export GLOO_SOCKET_IFNAME=eno2
+# export NCCL_DEBUG=INFO
+# export NCCL_IB_DISABLE=0
+# export NCCL_SOCKET_IFNAME=eno2  # 或你机器的网卡名
+# @ set -e; \
+# for c in configs/lm-pretrain/pubmed/causal.yaml; do \
+# 	bin/trainer.py fit -c "$$c"; \
+# done
+
+# @ set -e; \
+# for c in configs/gnn-pretrain/pubmed/base-lr-1e-2-20epoch.yaml; do \
+# 	bin/trainer.py fit -c "$$c"; \
+# done
 	
-	# @ set -e; \
-	# for c in configs/gnn-pretrain/pubmed/base-lr-1e-2-20epoch.yaml; do \
-	# 	bin/trainer.py fit -c "$$c"; \
-	# done
-	
-	@ set -e; \
+# ===== 遍历 configs =====
 	for c in configs/clip-graph/inductive-causal/pubmed/base.yaml; do \
 		bin/trainer.py fit -c "$$c"; \
 	done
+# for c in configs/clip-graph/inductive-causal/pubmed/base.yaml; do \
+# 	torchrun \
+# 		--nnodes=2 \
+# 		--nproc_per_node=1 \
+# 		--node_rank=0 \
+# 		--master_addr=$$MASTER_ADDR \
+# 		--master_port=29500 \
+# 		bin/trainer.py fit -c "$$c"; \
+# done
 	
 
 eval:

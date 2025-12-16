@@ -72,7 +72,7 @@ def interpret_ckpt_dir(
             sp.check_call([conv_script, checkpoint, sd_path], cwd=checkpoint)
 
         with open(sd_path, 'rb') as f:
-            sd = torch.load(f)
+            sd = torch.load(f, weights_only=True)
 
         # deepspeed saves the keys with a 'module.' in front
         sd = {'.'.join(k.split('.')[1:]) : v for k, v in sd.items()}

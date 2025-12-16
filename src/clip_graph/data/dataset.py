@@ -1,7 +1,10 @@
 '''
 The dataset including both a graph object and the associated texts
 '''
-
+import os
+# 设置只使用本地文件
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_DATASETS_OFFLINE'] = '1'
 from typing import Callable, Dict, Any, Optional, List, Union
 
 import copy
@@ -83,6 +86,7 @@ class BaseDataset(ABC, td.Dataset):
             )
 
         ret = {}
+        print(splits)
         for sp, nodes in splits.items():
             ret[sp] = self.restrict(nodes, inplace=False)
 
@@ -99,17 +103,19 @@ class TextDataset(BaseDataset):
 
         **kwargs: Any
     ) -> None:
+        print('in_text_dataset_init')
         super().__init__(**kwargs)
+        print('in_text_dataset_init_super')
 
         self.tokenizer_name = tokenizer_name
         self.tokenizer = tf.AutoTokenizer.from_pretrained(tokenizer_name)
-
+        print('in_text_dataset_init_tokenizer')
         # some models like GPT-2 didn't have a padding token, so we need to
         # set one to do batching. it's fine that it wasn't trained this way,
         # we're using the attention mask and these tokens will be ignored
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-
+        print('in_text_dataset_init_tokenizer_pad_token')
         self.tokenizer_params = {
             'return_tensors': 'pt',
             'return_attention_mask': True,
@@ -119,7 +125,7 @@ class TextDataset(BaseDataset):
             'padding': True,
             'max_length': self.tokenizer.model_max_length,
         }
-
+        print('in_text_dataset_init_tokenizer_params')
         if mlm:
             self.enable_mlm(mlm_probability)
         else:
@@ -235,14 +241,15 @@ class GraphDatasetMixin(BaseDataset):
 
         **kwargs: Any
     ) -> None:
+        print('in_graph_dataset_mixin_init')
         super().__init__(**kwargs)
-
+        print('in_graph_dataset_mixin_init_super')
         self.graph_data = graph_data
         self._drop_isolates = drop_isolates
-
+        print('in_graph_dataset_mixin_init_graph_data')
         if self._drop_isolates:
             self.drop_isolates(inplace=True)
-
+        print('in_graph_dataset_mixin_init_drop_isolates')
         self.compute_neg_edge_index()
 
     def compute_mutuals(self,
@@ -254,7 +261,7 @@ class GraphDatasetMixin(BaseDataset):
 
             edge_index = self.graph_data.edge_index
             num_nodes = self.graph_data.num_nodes
-
+        print('in_graph_dataset_mixin_compute_mutuals')
         A = to_dense_adj(edge_index).squeeze(0)
         # print(edge_index)
         # print("________",  A.shape)
@@ -264,12 +271,18 @@ class GraphDatasetMixin(BaseDataset):
 
         if torch.cuda.is_available():
             A = A.to(self.device)  # verrry slow on CPU
-
+        print('in_graph_dataset_mixin_compute_mutuals_A_to_device')
+        print('torch.cuda.is_available():', torch.cuda.is_available())
+        print(A.shape, '-'*50)
         with torch.no_grad():
+            print('in_graph_dataset_mixin_compute_mutuals_with_torch_no_grad')
             mutual = A @ A.T  # mutual in/out edge counts
             mutual = F.normalize(mutual, p=2, dim=1)
+            print('in_graph_dataset_mixin_compute_mutuals_F_normalize')
             mutual = mutual @ mutual.T  # cosine similarity
+            print('in_graph_dataset_mixin_compute_mutuals_mutual_T')
 
+        print('in_graph_dataset_mixin_compute_mutuals_mutual_cpu')
         self.graph_data.sim_mutual = mutual.cpu()
 
     def compute_neg_edge_index(self,
@@ -427,18 +440,18 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
     ) -> None:
         assert not (not transductive and transductive_identity_features), \
             "transductive_identity_features requires transductive = True"
-
+        print('in_graph_text_dataset_init_super')
         super().__init__(**kwargs)
 
         self.random_data_debug = random_data_debug
         self.max_texts_per_node = max_texts_per_node
         self.transductive = transductive
         self.transductive_identity_features = transductive_identity_features
-
+        print('in_graph_text_dataset_init')
         unique_text_node_ids = set(self.text_node_ids.tolist())
         unique_graph_node_ids = set(self.graph_data.node_ids.tolist())
         assert unique_text_node_ids <= unique_graph_node_ids
-
+        print('in_graph_text_dataset_init_unique_text_node_ids')
         if self.max_texts_per_node > 0:
             df = pd.concat([
                 pd.Series(self.text_node_ids.numpy(), name='text_node_ids'),
@@ -606,6 +619,116 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
         return ret
 
 
+    def extract_subgraph_with_texts(self, 
+                                node_mask: torch.Tensor, 
+                                k_hop: int = 1,
+                                include_self: bool = True) -> None:
+        """
+        提取指定节点的子图及其对应的文本，直接修改dataset内部内容
+        
+        Args:
+            node_id: 目标节点编号
+            k_hop: k跳子图，默认为1跳
+            include_self: 是否包含目标节点本身，默认为True
+        """
+        from torch_geometric.utils import k_hop_subgraph
+        
+        # 找到目标节点在图中的索引
+        if not node_mask.any():
+            raise ValueError(f"Node not found in the graph")
+        print("node_mask", node_mask, "-" * 50)
+        node_idx = torch.where(node_mask)[0]
+
+        selected_node_ids = self.graph_data.node_ids[node_idx]
+        print("node_idx", node_idx, "-" * 50)
+        print("self.graph_data.edge_index's shape", self.graph_data.edge_index.shape, "-" * 50)
+        print("k_hop", k_hop, "-" * 50)
+        # 提取k跳子图
+        subset, edge_index, mapping, edge_mask = k_hop_subgraph(
+            node_idx, 
+            k_hop, 
+            # 0,
+            self.graph_data.edge_index,
+            relabel_nodes=True,
+            num_nodes=self.graph_data.node_ids.size(0)
+        )
+        
+        #
+        # First construct the new graph
+        #
+        print("self.graph_data.node_ids", self.graph_data.node_ids, "-" * 50)
+        print("subset", subset, "-" * 50)
+        print("subset's shape", subset.shape, "-" * 50)
+        new_node_ids = self.graph_data.node_ids[subset]
+        print("new_node_ids", new_node_ids, "-" * 50)
+        graph_kwargs = {
+            'edge_index': edge_index,
+            'node_ids': new_node_ids
+        }
+        
+        # 复制其他图属性
+        misc_keys = list(set(self.graph_data.keys()) - set(graph_kwargs.keys()))
+        for key in misc_keys:
+            if key == 'neg_edge_index':
+                continue
+                
+            obj = getattr(self.graph_data, key)
+            
+            if isinstance(obj, (torch.Tensor, SparseTensor)):
+                if obj.size(0) == self.graph_data.node_ids.size(0):
+                    # 节点级别的属性
+                    graph_kwargs[key] = obj[subset]
+                elif obj.size(0) == self.graph_data.edge_index.size(1):
+                    # 边级别的属性
+                    graph_kwargs[key] = obj[edge_mask]
+                else:
+                    # 其他大小的张量，直接复制
+                    graph_kwargs[key] = obj
+            elif isinstance(obj, list) and len(obj) == self.graph_data.num_nodes:
+                # 节点级别的列表属性
+                indices = subset.tolist()
+                graph_kwargs[key] = [obj[i] for i in indices]
+            else:
+                # 其他属性直接复制
+                graph_kwargs[key] = obj
+        
+        # 更新图数据
+        self.graph_data = Data(**graph_kwargs)
+        
+        #
+        # Then construct the corresponding texts
+        #
+        
+        text_mask = torch.isin(self.text_node_ids, selected_node_ids)
+        print("text_mask", text_mask, "-" * 50)
+        if text_mask.any():
+            # 更新文本相关属性
+            self.text_node_ids = self.text_node_ids[text_mask]
+            self.text = self.text[text_mask.numpy()]
+            
+            if hasattr(self, 'input_ids'):
+                self.input_ids = self.input_ids[text_mask]
+            if hasattr(self, 'attention_mask'):
+                self.attention_mask = self.attention_mask[text_mask]
+            if hasattr(self, 'text_ids'):
+                self.text_ids = self.text_ids[text_mask]
+        else:
+            # 如果没有对应的文本，清空相关属性
+            self.text_node_ids = torch.tensor([], dtype=torch.long)
+            self.text = np.array([])
+            
+            if hasattr(self, 'input_ids'):
+                self.input_ids = torch.tensor([], dtype=torch.long)
+            if hasattr(self, 'attention_mask'):
+                self.attention_mask = torch.tensor([], dtype=torch.long)
+            if hasattr(self, 'text_ids'):
+                self.text_ids = torch.tensor([], dtype=torch.long)
+        
+        # 存储一些有用的信息供后续使用
+        self._extracted_node_id = new_node_ids
+        self._extracted_k_hop = k_hop
+        self._target_node_idx_in_subgraph = mapping if include_self else None
+
 # The loss we want to use this with is batch-wise contrastive (every element of
 # the batch is compared against every other element of the batch), so a) we
 # want to use large batches and b) it's not totally clear what an epoch is,
@@ -724,13 +847,19 @@ class BatchGraphTextDataset(BaseDataset):
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         indices = self._indices_for_batch(idx)
-
+        # print("indices", indices, "-" * 50)
         batch = [self.dataset[idx.item()] for idx in indices]
         batch = self.dataset.__collate__(batch)
-
+        # for key in batch.keys():
+        #     print(key, batch[key].shape, "-" * 50)
         return batch
 
     def __collate__(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # print("_"*100)
+        # for sample in samples:
+        #     print(sample.keys(), "-" * 50)
+        # print(len(samples), type(samples))
+        
         assert len(samples) == 1
 
         return samples[0]
