@@ -30,6 +30,20 @@ class ModelBase(nn.Module):
 # Graph models
 #
 
+GNN_LIST = [
+    "gat",  # GAT with 2 heads
+    "gcn",  # GCN
+    "gin",  # GIN
+    # "cheb",  # chebnet
+    "sage",  # sage
+    # "arma",
+    # "sg",  # simplifying gcn
+    "linear",  # skip connection
+    # "skip",  # skip connection
+    # "zero",  # skip connection
+]
+
+
 class GATLayer(ModelBase):
     def __init__(self, in_channels: int = 64,
                  out_channels: Optional[int] = None,
