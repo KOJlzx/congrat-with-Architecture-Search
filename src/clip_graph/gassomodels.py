@@ -16,7 +16,10 @@ from . import utils as ut
 #
 # Base classes
 #
-
+import typing as _typ
+# 或者直接导入 List
+from typing import List
+from torch.autograd import Variable
 
 class ModelBase(nn.Module):
     '''
@@ -42,6 +45,187 @@ GNN_LIST = [
     # "skip",  # skip connection
     # "zero",  # skip connection
 ]
+
+def gnn_map(gnn_name, in_dim, out_dim, concat=False, bias=True):
+    """
+    将 GNN 名称映射到对应的 PyTorch Geometric 模块
+    
+    :param gnn_name: GNN 操作名称 ("gat", "gcn", "gin", "sage", "linear")
+    :param in_dim: 输入特征维度
+    :param out_dim: 输出特征维度
+    :param concat: 对于 GAT，是否拼接多头输出
+    :param bias: 是否使用偏置
+    :return: GNN 模型模块
+    """
+    if gnn_name == "gat":
+        # GAT with 4 heads (根据注释)
+        return gnn.GATConv(in_dim, out_dim, heads=4, concat=concat, bias=bias, dropout=0.1)
+    elif gnn_name == "gcn":
+        return gnn.GCNConv(in_dim, out_dim, bias=bias)
+    elif gnn_name == "gin":
+        # GIN 需要一个 MLP
+        mlp = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim)
+        )
+        return gnn.GINConv(mlp, train_eps=True)
+    elif gnn_name == "sage":
+        return gnn.SAGEConv(in_dim, out_dim, bias=bias)
+    elif gnn_name == "linear":
+        # Linear 层（跳过连接），不依赖图结构
+        class LinearConv(nn.Module):
+            def __init__(self, in_channels, out_channels, bias=True):
+                super(LinearConv, self).__init__()
+                self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+            
+            def forward(self, x, edge_index, edge_weight=None):
+                return self.linear(x)
+        
+        return LinearConv(in_dim, out_dim, bias=bias)
+    else:
+        raise ValueError(f"Unsupported GNN name: {gnn_name}. Supported names are: {GNN_LIST}")
+
+class MixedOp(nn.Module):
+    def __init__(self, in_c, out_c, gnn_list=GNN_LIST):
+        super(MixedOp, self).__init__()
+        self._ops = nn.ModuleList()
+        self.gnn_list = gnn_list
+        for action in gnn_list:
+            self._ops.append(gnn_map(action, in_c, out_c))
+
+    def forward(self, x, edge_index, edge_weight, weights, selected_idx=None):
+        gnn_list = self.gnn_list
+        # weights: [steps, num_ops] (alphas_normal)  edge_weight: edge weights
+        if selected_idx is None:
+            fin = []
+            for w, op, op_name in zip(weights, self._ops, gnn_list):
+                """if op_name == "gcn":
+                    w = 1.0
+                else:
+                    continue"""
+                if edge_weight == None:
+                    fin.append(w * op(x, edge_index))
+                else:
+                    fin.append(w * op(x, edge_index, edge_attr=edge_weight))
+            return sum(fin)
+            # return sum(w * op(x, edge_index) for w, op in zip(weights, self._ops))
+        else:  # unchosen operations are pruned
+            return self._ops[selected_idx](x, edge_index)
+
+
+def Get_edges(adjs,):
+    edges = []
+    edges_weights = []
+    for adj in adjs:
+        edges.append(adj[0])
+        edges_weights.append(torch.sigmoid(adj[1]))
+    return edges, edges_weights
+
+
+class CellWS(nn.Module):
+    def __init__(self, steps, his_dim, hidden_dim, out_dim, dp, training=True, bias=True):
+        super(CellWS, self).__init__()
+        self.steps = steps
+        self._ops = nn.ModuleList()
+        self._bns = nn.ModuleList()
+        self.use2 = False
+        self.dp = 0.8
+        self.training = training
+        for i in range(self.steps):
+            if i == 0:
+                inpdim = his_dim
+            else:
+                inpdim = hidden_dim
+            if i == self.steps - 1:
+                oupdim = out_dim
+            else:
+                oupdim = hidden_dim
+            op = MixedOp(inpdim, oupdim)
+            self._ops.append(op)
+            self._bns.append(nn.BatchNorm1d(oupdim))
+
+    def forward(self, x, adjs, weights):
+        edges, ews = Get_edges(adjs)
+        for i in range(self.steps):
+            if i > 0:
+                x = F.relu(x)
+                x = F.dropout(x, p=self.dp, training=self.training)
+            x = self._ops[i](x, edges[i], ews[i], weights[i])  # call the gcn module
+        return x
+
+class GassoSpace(ModelBase):
+    def __init__(
+        self,
+        hidden_channels: int = 64,
+        num_layers: int = 4,
+        dropout: float = 0.1,
+        in_channels: int = 64,
+        out_channels: Optional[int] = None,
+        ops: _typ.Tuple = GNN_LIST,
+        training: bool = True,
+    ):
+
+        assert num_layers >= 1
+        assert in_channels is not None or out_channels is not None
+        assert in_channels is None or out_channels is None
+        
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.hidden_channels = hidden_channels
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.ops = ops
+        self.training = training
+        self.build_graph() # build the graph for gnn modules
+
+    def build_graph(self):
+        self.cell = CellWS( # cell -> gnn module
+            self.num_layers, self.in_channels, self.hidden_channels, self.out_channels, self.dropout, self.training
+        )
+        self.initialize_alphas() # initialize alphas for gnn modules
+
+    # def forward(self, x, adjs):
+    def forward(self, x, edge_index, edge_weight):
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        adjs = (edge_index, edge_weight)
+        weights = []
+        for j in range(self.num_layers):
+            weights.append(F.softmax(self.alphas_normal[j], dim=-1))
+
+        x = self.cell(x, adjs, weights)
+        x = F.log_softmax(x, dim=1)
+        return x
+
+    def keep_prediction(self):
+        self.prediction = self.current_pred
+
+    """def to(self, *args, **kwargs):
+        fin = super().to(*args, **kwargs)
+        device = next(fin.parameters()).device
+        fin.alphas_normal = [i.to(device) for i in self.alphas_normal]
+        return fin"""
+
+    def initialize_alphas(self):
+        num_ops = len(self.ops)
+
+        self.alphas_normal = [] # alphas_normal -> weights for gnn modules
+        for i in range(self.steps):
+            self.alphas_normal.append(
+                Variable(1e-3 * torch.randn(num_ops), requires_grad=True)
+            )
+
+        # shapes: [steps, num_ops]
+        self._arch_parameters = [self.alphas_normal]
+
+    def arch_parameters(self):
+        return self.alphas_normal
+
+    def parse_model(self, selection):
+        self.use_forward = False
+        return self.wrap()
+
 
 
 class GATLayer(ModelBase):
@@ -388,9 +572,10 @@ class ClipGraph(ModelBase):
 
     def embed_nodes(self,
         x: torch.Tensor,
-        edge_index: torch.Tensor
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor,
     ) -> torch.Tensor:
-        embeds = self.gnn(x, edge_index)
+        embeds = self.gnn(x, edge_index, edge_attr)
 
         if embeds['output'] is not None:
             embeds = embeds['output']
@@ -407,7 +592,7 @@ class ClipGraph(ModelBase):
         return embeds
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor,
-                graph_x: torch.Tensor, graph_edge_index: torch.Tensor,
+                graph_x: torch.Tensor, graph_edge_index: torch.Tensor, graph_edge_attr: torch.Tensor,
                 node_index: torch.Tensor) -> torch.Tensor:
         if self.debug_checks:
             assert not torch.isinf(input_ids).any().item()
@@ -433,7 +618,7 @@ class ClipGraph(ModelBase):
             assert not torch.isinf(lm_embeds).any().item()
             assert not torch.isnan(lm_embeds).any().item()
 
-        gnn_embeds = self.embed_nodes(graph_x, graph_edge_index)
+        gnn_embeds = self.embed_nodes(graph_x, graph_edge_index, graph_edge_attr)
         gnn_embeds = F.normalize(gnn_embeds, p=2, dim=1)
         gnn_embeds = gnn_embeds[node_index, ...]
         gnn_embeds = self.dropout(gnn_embeds)

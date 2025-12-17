@@ -32,7 +32,7 @@ model:
         # we do this handling of class name and init arguments ourselves rather
         # than use jsonargparse's class_path and init_args so that the
         # models can log their arguments without saving gigantic binary objects
-        gnn_class_name: 'GATMod'
+        gnn_class_name: 'GassoSpace'
 
         gnn_node_features_keys:
             - 'graph_x'

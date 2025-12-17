@@ -249,7 +249,7 @@ class GraphDatasetMixin(BaseDataset):
       # 初始化边权为零（如果不存在）
         if not hasattr(self.graph_data, 'edge_attr') or self.graph_data.edge_attr is None:
             num_edges = self.graph_data.edge_index.size(1)
-            self.graph_data.edge_attr = torch.zeros(num_edges, dtype=torch.float32)        
+            self.graph_data.edge_attr = torch.zeros([num_edges, 1], dtype=torch.float32)
         
         self._drop_isolates = drop_isolates
         print('in_graph_dataset_mixin_init_graph_data')
@@ -331,8 +331,8 @@ class GraphDatasetMixin(BaseDataset):
         graph_mask = (self.graph_data.node_ids[:, None] == targets).any(-1)
 
         new_node_ids = self.graph_data.node_ids[graph_mask]
-        new_edge_index, _ = subgraph(graph_mask, self.graph_data.edge_index,
-                                     relabel_nodes=True)
+        new_edge_index, edge_mask, _ = subgraph(graph_mask, self.graph_data.edge_index,
+                                     relabel_nodes=True, return_edge_mask=True)
 
         graph_kwargs = {
             'edge_index': new_edge_index,
@@ -347,7 +347,16 @@ class GraphDatasetMixin(BaseDataset):
             obj = getattr(self.graph_data, key)
 
             if isinstance(obj, (torch.Tensor, SparseTensor)):
-                graph_kwargs[key] = obj[graph_mask]
+                # 判断是节点级别还是边级别的属性
+                if obj.size(0) == self.graph_data.node_ids.size(0):
+                    # 节点级别的属性
+                    graph_kwargs[key] = obj[graph_mask]
+                elif obj.size(0) == self.graph_data.edge_index.size(1):
+                    # 边级别的属性（如 edge_attr）
+                    graph_kwargs[key] = obj[edge_mask]
+                else:
+                    # 其他大小的张量，直接复制
+                    graph_kwargs[key] = obj
             elif isinstance(obj, list) and len(obj) == self.graph_data.num_nodes:
                 indices = graph_mask.nonzero(as_tuple=False).view(-1).tolist()
                 graph_kwargs[key] = [obj[i] for i in indices]
