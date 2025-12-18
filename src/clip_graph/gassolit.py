@@ -21,10 +21,10 @@ import pytorch_lightning as pl
 
 from . import losses as ls
 from . import optimizers as op
-from . import models as md
+from . import gassomodels as md
 from . import utils as ut
 
-
+from .lit import LitBase, LitPretrainLM
 #
 # Base class
 #
@@ -52,83 +52,6 @@ def set_layernorm_eps(module, eps=1e-4):  # this is also an awful hack
     if isinstance(module, nn.LayerNorm):
         module.eps = eps
 
-
-class LitBase(ABC, pl.LightningModule):
-    '''
-    Base class for LightningModules
-    '''
-
-    def __init__(self,
-        model: Optional[md.ModelBase] = None,
-        model_class_name: Optional[str] = None,
-        model_file: Optional[Union[io.IOBase, str]] = None,
-        model_params: Optional[Dict[str, Any]] = None,
-
-        lr: float = 3e-5,
-        weight_decay: float = 0.0,
-        eps: float = 1e-6,
-        betas: Union[Tuple[float, float], List[float]] = (0.9, 0.999),
-    ) -> None:
-        super().__init__()
-
-        if model_class_name is None and model_params is not None:
-            raise ValueError('Extra keyword arguments are only meaningful '
-                             'together with model_class_name, when they are '
-                             'passed to its __init__ method')
-
-        if ut.count(model, model_class_name, model_file) != 1:
-            raise ValueError('Must provide exactly one of model, '
-                             'model_class_name, model_file')
-
-        if model is not None:
-            self.model = model
-        elif model_file is not None:
-            if isinstance(model_file, str):
-                with open(model_file, 'rb') as f:
-                    self.model = torch.load(f, weights_only=True)
-            elif isinstance(model_file, io.IOBase):
-                self.model = torch.load(model_file, weights_only=True)
-            else:
-                raise ValueError('model_file must be str or file-like')
-        else:  # model_class_name is not None
-            model_params = {} if model_params is None else model_params
-            self.model = getattr(md, model_class_name)(**model_params)
-
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.eps = eps
-        self.betas = tuple(betas)
-
-        self.save_hyperparameters(ignore=['model'])
-
-    def forward(self, *args: Any, **kwargs: Any) -> Any:
-        return self.model(*args, **kwargs)
-
-    @abstractmethod
-    def step(self,
-        batch: Dict[str, Any],
-        batch_idx: int,
-        split: str
-    ) -> torch.Tensor:
-        raise NotImplementedError()
-
-    def training_step(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        return self.step(*args, **kwargs, split='train')
-
-    def validation_step(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        return self.step(*args, **kwargs, split='val')
-
-    def test_step(self, *args: Any, **kwargs: Any) -> torch.Tensor:
-        return self.step(*args, **kwargs, split='test')
-
-    def configure_optimizers(self) -> Optimizer:
-        return torch.optim.AdamW(
-            self.parameters(),
-            lr=self.lr,
-            betas=self.betas,
-            eps=self.eps,
-            weight_decay=self.weight_decay
-        )
 
 
 #
@@ -275,107 +198,6 @@ class LitVGAE(LitGAE):
         return recon_loss + variational_loss
 
 
-#
-# Language models
-#
-
-
-class LitPretrainLM(LitBase):
-    def __init__(self,
-        num_warmup_steps: Optional[int] = None,
-        num_training_steps: Optional[int] = None,
-
-        **kwargs: Any
-    ) -> None:
-        super().__init__(**kwargs)
-
-        if (num_warmup_steps is None and num_training_steps is not None) or \
-           (num_training_steps is None and num_warmup_steps is not None):
-            raise ValueError('Must provide both or none of num_training_steps'
-                             'and num_warmup_steps')
-
-        self.num_warmup_steps = num_warmup_steps
-        self.num_training_steps = num_training_steps
-
-        # Example = cl.namedtuple('Example', ['input_ids', 'attention_mask'])
-        # self.example_input_array = Example(
-        #     # [
-        #     #     'This is a sentence.',
-        #     #     'Look, here is another sentence.',
-        #     #     'And finally here is a third sentence.',
-        #     # ],
-
-        #     torch.LongTensor([
-        #         [   0, 2027, 2007, 1041, 6255, 1016,    2,    1,    1,    1],
-        #         [   0, 2302, 1014, 2186, 2007, 2182, 6255, 1016,    2,    1],
-        #         [   0, 2002, 2637, 2186, 2007, 1041, 2357, 6255, 1016,    2]
-        #     ]),
-
-        #     torch.LongTensor([
-        #         [1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
-        #         [1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-        #         [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-        #     ]),
-        # )
-
-        self.save_hyperparameters(ignore=['model'])
-
-    def forward(self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor
-    ) -> torch.Tensor:
-        return self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-        )
-
-    def step(self,
-        batch: Dict[str, Any],
-        batch_idx: int,
-        split: str
-    ) -> torch.Tensor:
-        logits = self(batch['input_ids'], batch['attention_mask'])
-        B, W, H = logits.shape
-
-        loss = self.criterion(
-            logits.reshape(B * W, H),
-            batch['labels'].reshape(B * W),
-        )
-
-        self.log(f'{split}_loss', loss, on_step=True, on_epoch=True,
-                 logger=True, prog_bar=True, sync_dist=True, batch_size=B,
-                 rank_zero_only=True)
-
-        return loss
-
-    @property
-    def criterion(self) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-        return nn.CrossEntropyLoss(reduction='mean', ignore_index=-100)
-
-    def configure_optimizers(self) -> Optimizer:
-        opt = super().configure_optimizers()
-
-        if self.num_training_steps is None:
-            return opt
-        else:
-            fn = ft.partial(  # ft.partial objects are picklable for >1 GPU
-                op.warmup_lambda,
-                num_warmup_steps=self.num_warmup_steps,
-                num_training_steps=self.num_training_steps
-            )
-
-            sched = torch.optim.lr_scheduler.LambdaLR(opt, fn)
-
-            lr_dict = {
-                'scheduler': sched,
-                'interval': 'step',
-                'frequency': 1
-            }
-
-            return {
-                'optimizer': opt,
-                'lr_scheduler': lr_dict
-            }
 
 
 class LitClipGraphLMTrain(LitPretrainLM):
@@ -564,6 +386,7 @@ class LitClipGraph(LitBase):
             attention_mask = attention_mask,
             graph_x = graph_x,
             graph_edge_index = graph_edge_index,
+            graph_edge_attr = graph_edge_attr,
             node_index = node_index
         )
 

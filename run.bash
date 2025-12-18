@@ -20,4 +20,4 @@
 #     --master_port 29501 \
 #     bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/base.yaml"; \
 
-python  bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/base.yaml"; 
+python  bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/gassobase.yaml"; 

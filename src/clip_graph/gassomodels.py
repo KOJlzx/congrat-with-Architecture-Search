@@ -96,7 +96,7 @@ class MixedOp(nn.Module):
 
     def forward(self, x, edge_index, edge_weight, weights, selected_idx=None):
         gnn_list = self.gnn_list
-        # weights: [steps, num_ops] (alphas_normal)  edge_weight: edge weights
+        # weights: [num_layers, num_ops] (alphas_normal)  edge_weight: edge weights
         if selected_idx is None:
             fin = []
             for w, op, op_name in zip(weights, self._ops, gnn_list):
@@ -117,6 +117,8 @@ class MixedOp(nn.Module):
 def Get_edges(adjs,):
     edges = []
     edges_weights = []
+    # print(adjs[0], adjs[1])
+    # print("shape of adjs: ", adjs[0].shape, adjs[1].shape)
     for adj in adjs:
         edges.append(adj[0])
         edges_weights.append(torch.sigmoid(adj[1]))
@@ -124,20 +126,20 @@ def Get_edges(adjs,):
 
 
 class CellWS(nn.Module):
-    def __init__(self, steps, his_dim, hidden_dim, out_dim, dp, training=True, bias=True):
+    def __init__(self, num_layers, his_dim, hidden_dim, out_dim, dp, training=True, bias=True):
         super(CellWS, self).__init__()
-        self.steps = steps
+        self.num_layers = num_layers
         self._ops = nn.ModuleList()
         self._bns = nn.ModuleList()
         self.use2 = False
         self.dp = 0.8
         self.training = training
-        for i in range(self.steps):
+        for i in range(self.num_layers):
             if i == 0:
                 inpdim = his_dim
             else:
                 inpdim = hidden_dim
-            if i == self.steps - 1:
+            if i == self.num_layers - 1:
                 oupdim = out_dim
             else:
                 oupdim = hidden_dim
@@ -147,7 +149,7 @@ class CellWS(nn.Module):
 
     def forward(self, x, adjs, weights):
         edges, ews = Get_edges(adjs)
-        for i in range(self.steps):
+        for i in range(self.num_layers):
             if i > 0:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dp, training=self.training)
@@ -160,18 +162,19 @@ class GassoSpace(ModelBase):
         hidden_channels: int = 64,
         num_layers: int = 4,
         dropout: float = 0.1,
-        in_channels: int = 64,
+        in_channels: int = 768,
         out_channels: Optional[int] = None,
         ops: _typ.Tuple = GNN_LIST,
         training: bool = True,
     ):
 
         assert num_layers >= 1
-        assert in_channels is not None or out_channels is not None
-        assert in_channels is None or out_channels is None
+
         
         super().__init__()
         self.in_channels = in_channels
+        if out_channels is None:
+            out_channels = in_channels
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
@@ -196,7 +199,10 @@ class GassoSpace(ModelBase):
 
         x = self.cell(x, adjs, weights)
         x = F.log_softmax(x, dim=1)
-        return x
+        ret = {'last_hidden_state': x}
+        ret['output'] = None
+
+        return ret
 
     def keep_prediction(self):
         self.prediction = self.current_pred
@@ -211,12 +217,12 @@ class GassoSpace(ModelBase):
         num_ops = len(self.ops)
 
         self.alphas_normal = [] # alphas_normal -> weights for gnn modules
-        for i in range(self.steps):
+        for i in range(self.num_layers):
             self.alphas_normal.append(
                 Variable(1e-3 * torch.randn(num_ops), requires_grad=True)
             )
 
-        # shapes: [steps, num_ops]
+        # shapes: [num_layers, num_ops]
         self._arch_parameters = [self.alphas_normal]
 
     def arch_parameters(self):

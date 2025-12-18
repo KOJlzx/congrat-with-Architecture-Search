@@ -29,11 +29,11 @@ from torch_geometric.data import Data
 from torch_geometric.utils import from_networkx, to_dense_adj, to_undirected
 
 from .gassodataset import (
-    BaseDataset,
-    GraphDataset, TextDataset, GraphTextDataset,
+    GraphDataset, GraphTextDataset,
     BatchGraphTextDataset
 )
 
+from .datamodule import BaseDataModule, TextDataModule
 from ..utils import _train_val_test_split
 import time
 
@@ -42,157 +42,11 @@ import time
 #
 
 
-class BaseDataModule(ABC, pl.LightningDataModule):
-    def __init__(self,
-        data_dir: str,
-        batch_size: int = 32,
-        split_proportions: List[float] = [0.7, 0.1, 0.2],
-        seed: int = 42,
-        pin_memory: bool = True,
-        num_workers: int = 0,
-        device: Union[torch.device, str] = 'cuda',
-
-        **kwargs: Any
-    ) -> None:
-        if isinstance(split_proportions, (list, tuple)):
-            split_proportions = torch.tensor(split_proportions)
-        assert torch.isclose(split_proportions.sum(), torch.tensor(1.0))
-
-        super().__init__(**kwargs)
-
-        self.data_dir = data_dir
-        self.batch_size = batch_size
-        self.split_proportions = split_proportions  # [train, val, test]
-        self.seed = seed
-
-        self.pin_memory = pin_memory
-        self.num_workers = mp.cpu_count() if num_workers == -1 else num_workers
-        self.device = device
-
-        self._edgelist_path = os.path.join(self.data_dir, 'raw', 'graph.csv')
-        self._text_path = os.path.join(self.data_dir, 'raw', 'texts.csv')
-        self._node_data_path = os.path.join(self.data_dir, 'raw', 'node-data.csv')
-        self._derived_path = os.path.join(self.data_dir, 'derived', 'node-properties.csv')
-
-        self._split_nodes = None
-
-    @abstractmethod
-    def prepare_data(self) -> "BaseDataModule":
-        raise NotImplementedError()
-
-    @abstractmethod
-    def setup(self) -> "BaseDataModule":
-        raise NotImplementedError()
-
-    def post_compute_split_nodes_hook(self) -> "BaseDataModule":
-        pass
-
-    def post_split_hook(self) -> "BaseDataModule":
-        pass
-
-    def _get_edgelist(self) -> pd.DataFrame:
-        return pd.read_csv(self._edgelist_path, sep='\t')
-
-    def _get_text(self) -> pd.DataFrame:
-        ret = pd.read_csv(self._text_path, sep='\t')
-
-        if 'id' not in ret.columns:
-            ret['id'] = np.arange(ret.shape[0])
-
-        return ret
-
-    def _get_node_data(self) -> pd.DataFrame:
-        node_data = pd.read_csv(self._node_data_path, sep='\t')
-
-        if os.path.exists(self._derived_path):
-            derived = pd.read_csv(self._derived_path, sep='\t')
-            node_data = node_data.merge(derived, on='node_id', how='left')
-
-        return node_data
-
-    def _dataloader(self, dataset: BaseDataset, **kwargs: Any
-                   ) -> td.DataLoader:
-        print("in_dataloader", "-" * 50)
-        return td.DataLoader(
-            dataset,
-            batch_size = 1,
-            num_workers = 1,
-            pin_memory = self.pin_memory,
-            collate_fn = dataset.__collate__,  # *not* self.dataset
-            **kwargs
-        )
-
-    def train_dataloader(self, **kwargs: Any) -> td.DataLoader:
-        return self._dataloader(self.train_dataset, shuffle=True, **kwargs)
-
-    def val_dataloader(self, **kwargs: Any) -> td.DataLoader:
-        return self._dataloader(self.val_dataset, shuffle=False, **kwargs)
-
-    def test_dataloader(self, **kwargs: Any) -> td.DataLoader:
-        return self._dataloader(self.test_dataset, shuffle=False, **kwargs)
-
-    def compute_split_nodes(self) -> "BaseDataModule":
-        self._split_nodes = _train_val_test_split(
-            self.dataset.unique_node_ids,
-            self.split_proportions,
-            self.seed,
-        )
-
-        return self
-
-    def split(self) -> "BaseDataModule":
-        if self._split_nodes is None:
-            self.compute_split_nodes()
-
-        print('in_split_compute_split_nodes')
-        self.post_compute_split_nodes_hook()
-
-        print('in_split_splits')
-        splits = self.dataset.split(splits=self._split_nodes)
-        self.train_dataset = splits['train']
-        self.val_dataset = splits['val']
-        self.test_dataset = splits['test']
-    
-        print('in_split_splits_train_dataset')
-        self.post_split_hook()
-
-        return self
-
-
 #
 # Text-only data module
 #
 
 
-class TextDataModule(BaseDataModule):
-    def __init__(self,
-        tokenizer_name: str,
-        mlm: bool = False,
-        mlm_probability: float = 0.15,
-
-        **kwargs: Any
-    ) -> None:
-        super().__init__(**kwargs)
-
-        self.tokenizer_name = tokenizer_name
-        self.mlm = mlm
-        self.mlm_probability = mlm_probability
-
-    def prepare_data(self) -> "TextDataModule":
-        return self  # nothing to do
-
-    def setup(self, stage: Optional[str] = None) -> "TextDataModule":
-        self.dataset = TextDataset(
-            text = self._get_text(),
-            tokenizer_name = self.tokenizer_name,
-            mlm = self.mlm,
-            mlm_probability = self.mlm_probability,
-            device = self.device,
-        )
-
-        self.split()
-
-        return self
 
 
 #
@@ -305,7 +159,7 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
 
         return self
 
-    def setup(self, node: int, world_size: int, k_hop: int = 1, include_self: bool = True, idx: Optional[int] = None, stage: Optional[str] = None) -> "GraphTextDataModule":
+    def setup(self, node: int = 0, world_size: int = 1, k_hop: int = 1, include_self: bool = True, idx: Optional[int] = None, stage: Optional[str] = None) -> "GraphTextDataModule":
         self.dataset = GraphTextDataset(
             graph_data = self._get_graph_object(),
             drop_isolates = self.drop_isolates,
