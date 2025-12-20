@@ -423,7 +423,8 @@ class LitClipGraph(LitBase):
             graph_node_ids = batch['graph_node_ids'],
             text_node_ids = batch['text_node_ids'],
         )
-
+        if(self.model.gnn.step == 1):
+            return None
         # print(batch['text_node_ids'], batch['graph_node_ids']) 
         #([17145742, 12651051,  9787347, 12513038], device='cuda:0')
         # print(logits.shape)

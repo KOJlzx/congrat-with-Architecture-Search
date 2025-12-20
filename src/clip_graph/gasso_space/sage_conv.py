@@ -69,7 +69,6 @@ class SAGEConv(MessagePassing):
         if isinstance(x, Tensor):
             x: OptPairTensor = (x, x)
 
-        # propagate_type: (x: OptPairTensor)
         out = self.propagate(edge_index, x=x, edge_weight=edge_weight, size=size)
         out = self.lin_l(out)
 

@@ -271,7 +271,8 @@ class GraphDataModule(BaseDataModule):
 
         return self
 
-
+    def count_edges(self) -> int:
+        return self.dataset.graph_data.edge_index.shape[1]
 #
 # Graph+text data module
 #

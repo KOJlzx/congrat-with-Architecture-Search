@@ -20,6 +20,7 @@ import typing as _typ
 # 或者直接导入 List
 from typing import List
 from torch.autograd import Variable
+from .gasso_space import *
 
 class ModelBase(nn.Module):
     '''
@@ -46,45 +47,7 @@ GNN_LIST = [
     # "zero",  # skip connection
 ]
 
-def gnn_map(gnn_name, in_dim, out_dim, concat=False, bias=True):
-    """
-    将 GNN 名称映射到对应的 PyTorch Geometric 模块
-    
-    :param gnn_name: GNN 操作名称 ("gat", "gcn", "gin", "sage", "linear")
-    :param in_dim: 输入特征维度
-    :param out_dim: 输出特征维度
-    :param concat: 对于 GAT，是否拼接多头输出
-    :param bias: 是否使用偏置
-    :return: GNN 模型模块
-    """
-    if gnn_name == "gat":
-        # GAT with 4 heads (根据注释)
-        return gnn.GATConv(in_dim, out_dim, heads=4, concat=concat, bias=bias, dropout=0.1)
-    elif gnn_name == "gcn":
-        return gnn.GCNConv(in_dim, out_dim, bias=bias)
-    elif gnn_name == "gin":
-        # GIN 需要一个 MLP
-        mlp = nn.Sequential(
-            nn.Linear(in_dim, out_dim),
-            nn.ReLU(),
-            nn.Linear(out_dim, out_dim)
-        )
-        return gnn.GINConv(mlp, train_eps=True)
-    elif gnn_name == "sage":
-        return gnn.SAGEConv(in_dim, out_dim, bias=bias)
-    elif gnn_name == "linear":
-        # Linear 层（跳过连接），不依赖图结构
-        class LinearConv(nn.Module):
-            def __init__(self, in_channels, out_channels, bias=True):
-                super(LinearConv, self).__init__()
-                self.linear = nn.Linear(in_channels, out_channels, bias=bias)
-            
-            def forward(self, x, edge_index, edge_weight=None):
-                return self.linear(x)
-        
-        return LinearConv(in_dim, out_dim, bias=bias)
-    else:
-        raise ValueError(f"Unsupported GNN name: {gnn_name}. Supported names are: {GNN_LIST}")
+
 
 class MixedOp(nn.Module):
     def __init__(self, in_c, out_c, gnn_list=GNN_LIST):
@@ -100,14 +63,14 @@ class MixedOp(nn.Module):
         if selected_idx is None:
             fin = []
             for w, op, op_name in zip(weights, self._ops, gnn_list):
-                """if op_name == "gcn":
-                    w = 1.0
-                else:
-                    continue"""
+                # if op_name == "gat":
+                #     w = 1.0
+                # else:
+                #     continue
                 if edge_weight == None:
                     fin.append(w * op(x, edge_index))
                 else:
-                    fin.append(w * op(x, edge_index, edge_attr=edge_weight))
+                    fin.append(w * op(x, edge_index, edge_weight=edge_weight))
             return sum(fin)
             # return sum(w * op(x, edge_index) for w, op in zip(weights, self._ops))
         else:  # unchosen operations are pruned
@@ -117,11 +80,17 @@ class MixedOp(nn.Module):
 def Get_edges(adjs,):
     edges = []
     edges_weights = []
-    # print(adjs[0], adjs[1])
-    # print("shape of adjs: ", adjs[0].shape, adjs[1].shape)
-    for adj in adjs:
-        edges.append(adj[0])
-        edges_weights.append(torch.sigmoid(adj[1]))
+    edge_index_all = adjs[0]  # [num_layers, 2, E]
+    edge_weight_all = adjs[1]  # [num_layers, E, 1] or [num_layers, E]
+    
+    num_layers = edge_index_all.shape[0]
+    for i in range(num_layers):
+        edges.append(edge_index_all[i])  # [2, E]
+        ew = edge_weight_all[i]  # [E, 1] or [E]
+        # 确保 edge_weight 是 1D [E]
+        if ew.ndim > 1:
+            ew = ew.view(-1)  # [E]
+        edges_weights.append(torch.sigmoid(ew))
     return edges, edges_weights
 
 
@@ -181,6 +150,8 @@ class GassoSpace(ModelBase):
         self.dropout = dropout
         self.ops = ops
         self.training = training
+        self.adjs = None
+        self.step = 0
         self.build_graph() # build the graph for gnn modules
 
     def build_graph(self):
@@ -191,13 +162,19 @@ class GassoSpace(ModelBase):
 
     # def forward(self, x, adjs):
     def forward(self, x, edge_index, edge_weight):
+        if self.step == 0:
+            edge_index = edge_index.unsqueeze(0).repeat(self.num_layers, 1, 1)
+            edge_weight = edge_weight.unsqueeze(0).repeat(self.num_layers, 1, 1)
+            self.adjs = (edge_index, edge_weight)
+            self.step += 1
+            return None
+        self.step += 1
         x = F.dropout(x, p=self.dropout, training=self.training)
-        adjs = (edge_index, edge_weight)
         weights = []
         for j in range(self.num_layers):
             weights.append(F.softmax(self.alphas_normal[j], dim=-1))
 
-        x = self.cell(x, adjs, weights)
+        x = self.cell(x, self.adjs, weights)
         x = F.log_softmax(x, dim=1)
         ret = {'last_hidden_state': x}
         ret['output'] = None
@@ -560,7 +537,7 @@ class ClipGraph(ModelBase):
 
     def embed_text(self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor
+        attention_mask: torch.Tensor,
     ) -> torch.Tensor:
         embeds = self.lm(
             input_ids = input_ids,
@@ -582,7 +559,8 @@ class ClipGraph(ModelBase):
         edge_attr: torch.Tensor,
     ) -> torch.Tensor:
         embeds = self.gnn(x, edge_index, edge_attr)
-
+        if(self.gnn.step == 1):
+            return embeds
         if embeds['output'] is not None:
             embeds = embeds['output']
         else:
@@ -625,6 +603,8 @@ class ClipGraph(ModelBase):
             assert not torch.isnan(lm_embeds).any().item()
 
         gnn_embeds = self.embed_nodes(graph_x, graph_edge_index, graph_edge_attr)
+        if(self.gnn.step == 1):
+            return None
         gnn_embeds = F.normalize(gnn_embeds, p=2, dim=1)
         gnn_embeds = gnn_embeds[node_index, ...]
         gnn_embeds = self.dropout(gnn_embeds)
