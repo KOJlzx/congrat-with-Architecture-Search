@@ -306,7 +306,7 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
 
         return self
 
-    def setup(self, node: int, world_size: int, k_hop: int = 1, include_self: bool = True, idx: Optional[int] = None, stage: Optional[str] = None) -> "GraphTextDataModule":
+    def setup(self, node: int = 0, world_size: int = 1, k_hop: int = 1, include_self: bool = True, idx: Optional[int] = None, stage: Optional[str] = None) -> "GraphTextDataModule":
         self.dataset = GraphTextDataset(
             graph_data = self._get_graph_object(),
             drop_isolates = self.drop_isolates,

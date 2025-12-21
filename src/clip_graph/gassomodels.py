@@ -63,10 +63,10 @@ class MixedOp(nn.Module):
         if selected_idx is None:
             fin = []
             for w, op, op_name in zip(weights, self._ops, gnn_list):
-                # if op_name == "gat":
-                #     w = 1.0
-                # else:
-                #     continue
+                if op_name == "gat":
+                    w = 1.0
+                else:
+                    continue
                 if edge_weight == None:
                     fin.append(w * op(x, edge_index))
                 else:
@@ -161,7 +161,7 @@ class GassoSpace(ModelBase):
         self.initialize_alphas() # initialize alphas for gnn modules
 
     # def forward(self, x, adjs):
-    def forward(self, x, edge_index, edge_weight):
+    def forward(self, x, edge_index, edge_weight = None):
         if self.step == 0:
             edge_index = edge_index.unsqueeze(0).repeat(self.num_layers, 1, 1)
             edge_weight = edge_weight.unsqueeze(0).repeat(self.num_layers, 1, 1)
@@ -556,7 +556,7 @@ class ClipGraph(ModelBase):
     def embed_nodes(self,
         x: torch.Tensor,
         edge_index: torch.Tensor,
-        edge_attr: torch.Tensor,
+        edge_attr: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         embeds = self.gnn(x, edge_index, edge_attr)
         if(self.gnn.step == 1):

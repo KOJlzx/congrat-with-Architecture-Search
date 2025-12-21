@@ -150,7 +150,7 @@ trainer:
     # Limits on epochs/steps/batches/time
     #
 
-    max_epochs: 20
+    max_epochs: 5
     min_epochs: 2
 
     #
