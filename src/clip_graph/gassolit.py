@@ -86,10 +86,14 @@ class LitGAE(LitBase):
 
     def forward(self,
         x: torch.Tensor,
-        edge_index: torch.Tensor
+        edge_index: torch.Tensor, 
+        edge_weight: torch.Tensor
     ) -> torch.Tensor:
-        out = self.model.encoder(x, edge_index)
-
+        out = self.model.encoder(x, edge_index, edge_weight)
+        # print("step", self.model.encoder.step)
+        # print("f" * 100)
+        if (self.model.encoder.step == 1):
+            return out
         if isinstance(out, torch.Tensor):
             pass
         elif isinstance(out, cl.abc.Mapping) and out['output'] is not None:
@@ -105,6 +109,8 @@ class LitGAE(LitBase):
         batch: Dict[str, Any],
         outputs: LitGAEOutput,
     ) -> torch.Tensor:
+        if(self.model.encoder.step == 1):
+            return outputs.z.sum() * 0.0
         return self.model.recon_loss(
             outputs.z,
             batch['graph_edge_index'],
@@ -119,7 +125,10 @@ class LitGAE(LitBase):
         x = torch.cat([batch[k] for k in self.node_features_keys], dim=1)
         x = x.float()
 
-        outputs = self(x, batch['graph_edge_index'])
+        
+        outputs = self(x, batch['graph_edge_index'], batch['graph_edge_attr'])
+        if(self.model.encoder.step == 1):
+            return None
         loss = self.loss(batch, outputs)
 
         auc, ap = self.model.test(

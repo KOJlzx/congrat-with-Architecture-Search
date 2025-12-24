@@ -21,7 +21,7 @@ import pytorch_lightning as pl
 
 from . import losses as ls
 from . import optimizers as op
-from . import models as md
+from . import gassomodels as md
 from . import utils as ut
 
 

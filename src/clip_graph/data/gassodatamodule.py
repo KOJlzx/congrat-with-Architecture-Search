@@ -93,10 +93,10 @@ class GraphDataModule(BaseDataModule):
             pickle.dump(graph_data, f)
 
     def _get_graph_object(self) -> Data:
-        print('in_get_graph_object')
+        # print('in_get_graph_object')
         with open(self._graph_data_cache_path, 'rb') as f:
             ret = pickle.load(f)
-        print('in_get_graph_object_pickle_load')
+        # print('in_get_graph_object_pickle_load')
         if not self.directed:
             if hasattr(ret, 'num_nodes'):
                 num_nodes = ret.num_nodes
@@ -174,7 +174,7 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
             device = self.device,
         )
 
-        print("in_setup_graph_text_dataset_extract_subgraph_with_texts")
+        # print("in_setup_graph_text_dataset_extract_subgraph_with_texts")
         total_samples = self.dataset.graph_data.node_ids.shape[0]
         samples_per_shard = total_samples // world_size
         start_idx = node * samples_per_shard
@@ -184,15 +184,15 @@ class GraphTextDataModule(TextDataModule, GraphDataModule):
 
 
         self.dataset.extract_subgraph_with_texts(node_mask, k_hop, include_self)
-        print("in_setup_graph_text_dataset")
+        # print("in_setup_graph_text_dataset")
         self.split()
-        print("in_setup_graph_text_dataset_split")
+        # print("in_setup_graph_text_dataset_split")
         # wrap the datasets in batching logic
         datasets = ['train_dataset', 'val_dataset', 'test_dataset']
         for dataset_name in datasets:
             dataset = getattr(self, dataset_name)
             dataset.compute_mutuals()
-            print('in_setup_graph_text_dataset_compute_mutuals')    
+            # print('in_setup_graph_text_dataset_compute_mutuals')    
             dataset = BatchGraphTextDataset(
                 dataset,
                 batch_size = self._real_batch_size,

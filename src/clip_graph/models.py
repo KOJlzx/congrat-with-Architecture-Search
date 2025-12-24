@@ -13,6 +13,7 @@ import transformers as tf
 
 from . import utils as ut
 
+from .gassomodels import GassoSpace
 #
 # Base classes
 #

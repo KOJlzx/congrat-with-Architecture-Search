@@ -54,27 +54,32 @@ class MixedOp(nn.Module):
         super(MixedOp, self).__init__()
         self._ops = nn.ModuleList()
         self.gnn_list = gnn_list
+        self.norm = nn.LayerNorm(out_c)
         for action in gnn_list:
             self._ops.append(gnn_map(action, in_c, out_c))
 
     def forward(self, x, edge_index, edge_weight, weights, selected_idx=None):
         gnn_list = self.gnn_list
+        print(weights)
         # weights: [num_layers, num_ops] (alphas_normal)  edge_weight: edge weights
         if selected_idx is None:
             fin = []
             for w, op, op_name in zip(weights, self._ops, gnn_list):
-                if op_name == "gat":
-                    w = 1.0
-                else:
-                    continue
-                if edge_weight == None:
-                    fin.append(w * op(x, edge_index))
-                else:
-                    fin.append(w * op(x, edge_index, edge_weight=edge_weight))
-            return sum(fin)
+                # if op_name == "gat":
+                #     w = 1.0
+                # else:
+                #     continue
+                fin.append(w * op(x, edge_index))
+                # if edge_weight == None:
+                #     fin.append(w * op(x, edge_index))
+                # else:
+                #     # print("edge_weight", edge_weight)
+                #     # print("X"*100)
+                #     fin.append(w * op(x, edge_index, edge_weight=edge_weight))
+            return self.norm(sum(fin))
             # return sum(w * op(x, edge_index) for w, op in zip(weights, self._ops))
         else:  # unchosen operations are pruned
-            return self._ops[selected_idx](x, edge_index)
+            return self.norm(self._ops[selected_idx](x, edge_index))
 
 
 def Get_edges(adjs,):
@@ -91,6 +96,9 @@ def Get_edges(adjs,):
         if ew.ndim > 1:
             ew = ew.view(-1)  # [E]
         edges_weights.append(torch.sigmoid(ew))
+        # print(ew.shape)
+        # print(ew)
+        # print("X"*100)
     return edges, edges_weights
 
 
@@ -99,22 +107,21 @@ class CellWS(nn.Module):
         super(CellWS, self).__init__()
         self.num_layers = num_layers
         self._ops = nn.ModuleList()
-        self._bns = nn.ModuleList()
         self.use2 = False
         self.dp = 0.8
         self.training = training
         for i in range(self.num_layers):
-            if i == 0:
-                inpdim = his_dim
-            else:
-                inpdim = hidden_dim
-            if i == self.num_layers - 1:
-                oupdim = out_dim
-            else:
-                oupdim = hidden_dim
-            op = MixedOp(inpdim, oupdim)
+            # if i == 0:
+            #     inpdim = his_dim
+            # else:
+            #     inpdim = hidden_dim
+            # if i == self.num_layers - 1:
+            #     oupdim = out_dim
+            # else:
+            #     oupdim = hidden_dim
+
+            op = MixedOp(hidden_dim, hidden_dim)
             self._ops.append(op)
-            self._bns.append(nn.BatchNorm1d(oupdim))
 
     def forward(self, x, adjs, weights):
         edges, ews = Get_edges(adjs)
@@ -147,11 +154,23 @@ class GassoSpace(ModelBase):
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
-        self.dropout = dropout
         self.ops = ops
         self.training = training
         self.adjs = None
         self.step = 0
+        self.dropout = nn.Dropout(dropout)
+        if self.in_channels is not None:
+            self.embed = nn.Linear(self.in_channels, self.hidden_channels)
+        else:  # self.num_nodes is not None
+            self.embed = nn.Embedding(self.num_nodes, self.hidden_channels)
+        if self.out_channels is not None:
+            self.head = nn.Sequential(
+                nn.LayerNorm(self.hidden_channels),
+                nn.GELU(),
+                nn.Linear(self.hidden_channels, self.out_channels)
+            )
+        else:
+            self.head = None
         self.build_graph() # build the graph for gnn modules
 
     def build_graph(self):
@@ -168,16 +187,26 @@ class GassoSpace(ModelBase):
             self.adjs = (edge_index, edge_weight)
             self.step += 1
             return None
+        # print(self.adjs[0], self.adjs[1])
+        # print(self.alphas_normal)
+        # print("X"*100)
         self.step += 1
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        if self.in_channels is not None:
+            x = self.dropout(x)
+            x = self.embed(x) * (self.hidden_channels ** 0.5)
+        else:
+            x = self.embed(x) * (self.hidden_channels ** 0.5)
+            x = self.dropout(x)
         weights = []
         for j in range(self.num_layers):
             weights.append(F.softmax(self.alphas_normal[j], dim=-1))
 
         x = self.cell(x, self.adjs, weights)
-        x = F.log_softmax(x, dim=1)
         ret = {'last_hidden_state': x}
-        ret['output'] = None
+        if self.head is not None:
+            ret['output'] = self.head(x)
+        else:
+            ret['output'] = None
 
         return ret
 
@@ -193,10 +222,11 @@ class GassoSpace(ModelBase):
     def initialize_alphas(self):
         num_ops = len(self.ops)
 
-        self.alphas_normal = [] # alphas_normal -> weights for gnn modules
+        # self.alphas_normal = [] # alphas_normal -> weights for gnn modules
+        self.alphas_normal = nn.ParameterList() # alphas_normal -> weights for gnn modules
         for i in range(self.num_layers):
             self.alphas_normal.append(
-                Variable(1e-3 * torch.randn(num_ops), requires_grad=True)
+                nn.Parameter(1e-3 * torch.randn(num_ops))
             )
 
         # shapes: [num_layers, num_ops]

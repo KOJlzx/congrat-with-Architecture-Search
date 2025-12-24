@@ -250,16 +250,16 @@ class GraphDatasetMixin(BaseDataset):
         if not hasattr(self.graph_data, 'edge_attr') or self.graph_data.edge_attr is None:
             num_edges = self.graph_data.edge_index.size(1)
             self.graph_data.edge_attr = torch.zeros([num_edges, 1], dtype=torch.float32)
-        print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
-        print(self.graph_data.edge_index.shape)
-        print(self.graph_data.edge_attr.shape)
-        print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+        # print(self.graph_data.edge_index.shape)
+        # print(self.graph_data.edge_attr.shape)
+        # print("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
         
         self._drop_isolates = drop_isolates
-        print('in_graph_dataset_mixin_init_graph_data')
+        # print('in_graph_dataset_mixin_init_graph_data')
         if self._drop_isolates:
             self.drop_isolates(inplace=True)
-        print('in_graph_dataset_mixin_init_drop_isolates')
+        # print('in_graph_dataset_mixin_init_drop_isolates')
         self.compute_neg_edge_index()
 
     def compute_mutuals(self,
@@ -271,7 +271,7 @@ class GraphDatasetMixin(BaseDataset):
 
             edge_index = self.graph_data.edge_index
             num_nodes = self.graph_data.num_nodes
-        print('in_graph_dataset_mixin_compute_mutuals')
+        # print('in_graph_dataset_mixin_compute_mutuals')
         A = to_dense_adj(edge_index).squeeze(0)
         # print(edge_index)
         # print("________",  A.shape)
@@ -281,18 +281,18 @@ class GraphDatasetMixin(BaseDataset):
 
         if torch.cuda.is_available():
             A = A.to(self.device)  # verrry slow on CPU
-        print('in_graph_dataset_mixin_compute_mutuals_A_to_device')
-        print('torch.cuda.is_available():', torch.cuda.is_available())
+        # print('in_graph_dataset_mixin_compute_mutuals_A_to_device')
+        # print('torch.cuda.is_available():', torch.cuda.is_available())
         print(A.shape, '-'*50)
         with torch.no_grad():
-            print('in_graph_dataset_mixin_compute_mutuals_with_torch_no_grad')
+            # print('in_graph_dataset_mixin_compute_mutuals_with_torch_no_grad')
             mutual = A @ A.T  # mutual in/out edge counts
             mutual = F.normalize(mutual, p=2, dim=1)
-            print('in_graph_dataset_mixin_compute_mutuals_F_normalize')
+            # print('in_graph_dataset_mixin_compute_mutuals_F_normalize')
             mutual = mutual @ mutual.T  # cosine similarity
-            print('in_graph_dataset_mixin_compute_mutuals_mutual_T')
+            # print('in_graph_dataset_mixin_compute_mutuals_mutual_T')
 
-        print('in_graph_dataset_mixin_compute_mutuals_mutual_cpu')
+        # print('in_graph_dataset_mixin_compute_mutuals_mutual_cpu')
         self.graph_data.sim_mutual = mutual.cpu()
 
     def compute_neg_edge_index(self,
@@ -337,9 +337,9 @@ class GraphDatasetMixin(BaseDataset):
         new_node_ids = self.graph_data.node_ids[graph_mask]
         new_edge_index, new_edge_attr, edge_mask = subgraph(graph_mask, self.graph_data.edge_index, edge_attr=self.graph_data.edge_attr,
                                      relabel_nodes=True, return_edge_mask=True)
-        print("new_edge_attr", new_edge_attr.shape)
-        print("pre_edge_attr", self.graph_data.edge_attr.shape)
-        print("X"*100)
+        # print("new_edge_attr", new_edge_attr.shape)
+        # print("pre_edge_attr", self.graph_data.edge_attr.shape)
+        # print("X"*100)
         graph_kwargs = {
             'edge_index': new_edge_index,
             'node_ids': new_node_ids,
@@ -669,11 +669,11 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
         #
         # First construct the new graph
         #
-        print("self.graph_data.node_ids", self.graph_data.node_ids, "-" * 50)
-        print("subset", subset, "-" * 50)
-        print("subset's shape", subset.shape, "-" * 50)
+        # print("self.graph_data.node_ids", self.graph_data.node_ids, "-" * 50)
+        # print("subset", subset, "-" * 50)
+        # print("subset's shape", subset.shape, "-" * 50)
         new_node_ids = self.graph_data.node_ids[subset]
-        print("new_node_ids", new_node_ids, "-" * 50)
+        # print("new_node_ids", new_node_ids, "-" * 50)
         graph_kwargs = {
             'edge_index': edge_index,
             'node_ids': new_node_ids
@@ -713,7 +713,7 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
         #
         
         text_mask = torch.isin(self.text_node_ids, selected_node_ids)
-        print("text_mask", text_mask, "-" * 50)
+        # print("text_mask", text_mask, "-" * 50)
         if text_mask.any():
             # 更新文本相关属性
             self.text_node_ids = self.text_node_ids[text_mask]
