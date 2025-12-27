@@ -60,12 +60,14 @@ class MixedOp(nn.Module):
 
     def forward(self, x, edge_index, edge_weight, weights, selected_idx=None):
         gnn_list = self.gnn_list
-        print(weights)
+        # print(weights)
+        # print(x.shape)
         # weights: [num_layers, num_ops] (alphas_normal)  edge_weight: edge weights
         if selected_idx is None:
             fin = []
+
             for w, op, op_name in zip(weights, self._ops, gnn_list):
-                # if op_name == "gat":
+                # if op_name == "gcn":
                 #     w = 1.0
                 # else:
                 #     continue
@@ -79,6 +81,8 @@ class MixedOp(nn.Module):
             return self.norm(sum(fin))
             # return sum(w * op(x, edge_index) for w, op in zip(weights, self._ops))
         else:  # unchosen operations are pruned
+            print("selected_idx", GNN_LIST[selected_idx])
+            print("X"*100)
             return self.norm(self._ops[selected_idx](x, edge_index))
 
 
@@ -123,13 +127,16 @@ class CellWS(nn.Module):
             op = MixedOp(hidden_dim, hidden_dim)
             self._ops.append(op)
 
-    def forward(self, x, adjs, weights):
+    def forward(self, x, adjs, weights, index=None):
         edges, ews = Get_edges(adjs)
         for i in range(self.num_layers):
             if i > 0:
                 x = F.relu(x)
                 x = F.dropout(x, p=self.dp, training=self.training)
-            x = self._ops[i](x, edges[i], ews[i], weights[i])  # call the gcn module
+            if index is not None:
+                x = self._ops[i](x, edges[i], ews[i], weights[i], index[i])  # call the gcn module
+            else:
+                x = self._ops[i](x, edges[i], ews[i], weights[i])  # call the gcn module
         return x
 
 class GassoSpace(ModelBase):
@@ -180,7 +187,7 @@ class GassoSpace(ModelBase):
         self.initialize_alphas() # initialize alphas for gnn modules
 
     # def forward(self, x, adjs):
-    def forward(self, x, edge_index, edge_weight = None):
+    def forward(self, x, edge_index, edge_weight = None, is_search = True):
         if self.step == 0:
             edge_index = edge_index.unsqueeze(0).repeat(self.num_layers, 1, 1)
             edge_weight = edge_weight.unsqueeze(0).repeat(self.num_layers, 1, 1)
@@ -199,9 +206,18 @@ class GassoSpace(ModelBase):
             x = self.dropout(x)
         weights = []
         for j in range(self.num_layers):
+            # print(self.alphas_normal[j])
+            # print("X"*100)
             weights.append(F.softmax(self.alphas_normal[j], dim=-1))
-
-        x = self.cell(x, self.adjs, weights)
+        if is_search:
+            index = None
+        else:
+            weights_tensor = torch.stack(weights)
+            weights_tensor = weights_tensor.detach()
+            index = torch.argmax(weights_tensor, dim=-1)
+            weights = [w.detach() for w in weights]
+            print("index", index)
+        x = self.cell(x, self.adjs, weights, index)
         ret = {'last_hidden_state': x}
         if self.head is not None:
             ret['output'] = self.head(x)

@@ -103,19 +103,19 @@ class TextDataset(BaseDataset):
 
         **kwargs: Any
     ) -> None:
-        print('in_text_dataset_init')
+        # print('in_text_dataset_init')
         super().__init__(**kwargs)
-        print('in_text_dataset_init_super')
+        # print('in_text_dataset_init_super')
 
         self.tokenizer_name = tokenizer_name
         self.tokenizer = tf.AutoTokenizer.from_pretrained(tokenizer_name)
-        print('in_text_dataset_init_tokenizer')
+        # print('in_text_dataset_init_tokenizer')
         # some models like GPT-2 didn't have a padding token, so we need to
         # set one to do batching. it's fine that it wasn't trained this way,
         # we're using the attention mask and these tokens will be ignored
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-        print('in_text_dataset_init_tokenizer_pad_token')
+        # print('in_text_dataset_init_tokenizer_pad_token')
         self.tokenizer_params = {
             'return_tensors': 'pt',
             'return_attention_mask': True,
@@ -125,7 +125,7 @@ class TextDataset(BaseDataset):
             'padding': True,
             'max_length': self.tokenizer.model_max_length,
         }
-        print('in_text_dataset_init_tokenizer_params')
+        # print('in_text_dataset_init_tokenizer_params')
         if mlm:
             self.enable_mlm(mlm_probability)
         else:
@@ -241,9 +241,9 @@ class GraphDatasetMixin(BaseDataset):
 
         **kwargs: Any
     ) -> None:
-        print('in_graph_dataset_mixin_init')
+        # print('in_graph_dataset_mixin_init')
         super().__init__(**kwargs)
-        print('in_graph_dataset_mixin_init_super')
+        # print('in_graph_dataset_mixin_init_super')
         self.graph_data = graph_data
         
       # 初始化边权为零（如果不存在）
@@ -283,7 +283,7 @@ class GraphDatasetMixin(BaseDataset):
             A = A.to(self.device)  # verrry slow on CPU
         # print('in_graph_dataset_mixin_compute_mutuals_A_to_device')
         # print('torch.cuda.is_available():', torch.cuda.is_available())
-        print(A.shape, '-'*50)
+        # print(A.shape, '-'*50)
         with torch.no_grad():
             # print('in_graph_dataset_mixin_compute_mutuals_with_torch_no_grad')
             mutual = A @ A.T  # mutual in/out edge counts
@@ -453,18 +453,18 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
     ) -> None:
         assert not (not transductive and transductive_identity_features), \
             "transductive_identity_features requires transductive = True"
-        print('in_graph_text_dataset_init_super')
+        # print('in_graph_text_dataset_init_super')
         super().__init__(**kwargs)
 
         self.random_data_debug = random_data_debug
         self.max_texts_per_node = max_texts_per_node
         self.transductive = transductive
         self.transductive_identity_features = transductive_identity_features
-        print('in_graph_text_dataset_init')
+        # print('in_graph_text_dataset_init')
         unique_text_node_ids = set(self.text_node_ids.tolist())
         unique_graph_node_ids = set(self.graph_data.node_ids.tolist())
         assert unique_text_node_ids <= unique_graph_node_ids
-        print('in_graph_text_dataset_init_unique_text_node_ids')
+        # print('in_graph_text_dataset_init_unique_text_node_ids')
         if self.max_texts_per_node > 0:
             df = pd.concat([
                 pd.Series(self.text_node_ids.numpy(), name='text_node_ids'),
@@ -649,13 +649,13 @@ class GraphTextDataset(GraphDatasetMixin, TextDataset):
         # 找到目标节点在图中的索引
         if not node_mask.any():
             raise ValueError(f"Node not found in the graph")
-        print("node_mask", node_mask, "-" * 50)
+        # print("node_mask", node_mask, "-" * 50)
         node_idx = torch.where(node_mask)[0]
 
         selected_node_ids = self.graph_data.node_ids[node_idx]
-        print("node_idx", node_idx, "-" * 50)
-        print("self.graph_data.edge_index's shape", self.graph_data.edge_index.shape, "-" * 50)
-        print("k_hop", k_hop, "-" * 50)
+        # print("node_idx", node_idx, "-" * 50)
+        # print("self.graph_data.edge_index's shape", self.graph_data.edge_index.shape, "-" * 50)
+        # print("k_hop", k_hop, "-" * 50)
         # 提取k跳子图
         subset, edge_index, mapping, edge_mask = k_hop_subgraph(
             node_idx, 

@@ -74,7 +74,7 @@ class LitGAE(LitBase):
 
         self.model = self.autoencoder_class(encoder=self.model)
         self.node_features_keys = node_features_keys
-
+        self.epoch = 0
         # Example = cl.namedtuple('Example', ['x', 'edge_index'])
         # self.example_input_array = Example(
         #     # 200 (fake) nodes, 768 node data dims, 1000 edges
@@ -87,9 +87,16 @@ class LitGAE(LitBase):
     def forward(self,
         x: torch.Tensor,
         edge_index: torch.Tensor, 
-        edge_weight: torch.Tensor
+        edge_weight: torch.Tensor,
+        is_search: bool = True
     ) -> torch.Tensor:
-        out = self.model.encoder(x, edge_index, edge_weight)
+
+        if(self.epoch > 26):
+            is_search = False
+        print("epoch", self.epoch)
+        print("is_search", is_search)
+        out = self.model.encoder(x, edge_index, edge_weight, is_search)
+        self.epoch += 1
         # print("step", self.model.encoder.step)
         # print("f" * 100)
         if (self.model.encoder.step == 1):
@@ -132,7 +139,7 @@ class LitGAE(LitBase):
         loss = self.loss(batch, outputs)
 
         auc, ap = self.model.test(
-            outputs.z,
+            outputs.z.float(),
             batch['graph_edge_index'],
             batch['graph_neg_edge_index'],
         )

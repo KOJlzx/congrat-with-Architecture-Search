@@ -126,7 +126,7 @@ def _train_val_test_split(
 
     # shuffle the node_ids
     node_ids = node_ids[torch.randperm(node_ids.shape[0], generator=gen)]
-
+    print("node_ids", node_ids)
     # NOTE sum(split_counts) may be <= 2 elements shorter than
     # len(node_ids), but this is fine; we just apportion all remaining
     # elements to the test set. so: train and val set lengths are

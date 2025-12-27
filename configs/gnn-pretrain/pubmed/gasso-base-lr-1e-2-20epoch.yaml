@@ -64,7 +64,7 @@ trainer:
 
     num_nodes: 1
     accelerator: 'gpu'
-    devices: [0]
+    devices: 1
 
     precision: 16
 
@@ -97,7 +97,7 @@ trainer:
     #
 
     max_epochs: 100
-    min_epochs: 21
+    min_epochs: 17
 
     limit_train_batches: 1
     limit_val_batches: 1
