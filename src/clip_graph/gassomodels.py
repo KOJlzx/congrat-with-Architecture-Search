@@ -6,6 +6,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.init as init
 
 import torch_geometric.nn as gnn
 
@@ -53,6 +54,7 @@ class MixedOp(nn.Module):
     def __init__(self, in_c, out_c, gnn_list=GNN_LIST):
         super(MixedOp, self).__init__()
         self._ops = nn.ModuleList()
+        self.gat_op = gnn.GATConv(in_c, out_c)
         self.gnn_list = gnn_list
         self.norm = nn.LayerNorm(out_c)
         for action in gnn_list:
@@ -67,17 +69,21 @@ class MixedOp(nn.Module):
             fin = []
 
             for w, op, op_name in zip(weights, self._ops, gnn_list):
-                # if op_name == "gcn":
-                #     w = 1.0
-                # else:
-                #     continue
+                if op_name == "gat":
+                    w = 1.0
+                else:
+                    continue
                 fin.append(w * op(x, edge_index))
+                # fin.append(self.gat_op(x, edge_index))
                 # if edge_weight == None:
                 #     fin.append(w * op(x, edge_index))
                 # else:
                 #     # print("edge_weight", edge_weight)
                 #     # print("X"*100)
                 #     fin.append(w * op(x, edge_index, edge_weight=edge_weight))
+            # print("fin", fin)
+            # print(sum(fin))
+            # print("X"*100)
             return self.norm(sum(fin))
             # return sum(w * op(x, edge_index) for w, op in zip(weights, self._ops))
         else:  # unchosen operations are pruned
@@ -112,7 +118,7 @@ class CellWS(nn.Module):
         self.num_layers = num_layers
         self._ops = nn.ModuleList()
         self.use2 = False
-        self.dp = 0.8
+        self.dp = 0.3
         self.training = training
         for i in range(self.num_layers):
             # if i == 0:
@@ -127,16 +133,18 @@ class CellWS(nn.Module):
             op = MixedOp(hidden_dim, hidden_dim)
             self._ops.append(op)
 
-    def forward(self, x, adjs, weights, index=None):
+    def forward(self, x, adjs, edge_index, weights, index=None):
         edges, ews = Get_edges(adjs)
         for i in range(self.num_layers):
-            if i > 0:
-                x = F.relu(x)
-                x = F.dropout(x, p=self.dp, training=self.training)
+            # if i > 0:
+            #     x = F.relu(x)
+            #     x = F.dropout(x, p=self.dp, training=self.training)
+            # x = F.relu(x)
+            # x = F.dropout(x, p=self.dp, training=self.training)
             if index is not None:
-                x = self._ops[i](x, edges[i], ews[i], weights[i], index[i])  # call the gcn module
+                x = x + self._ops[i](x, edge_index, ews[i], weights[i], index[i])  # call the gcn module
             else:
-                x = self._ops[i](x, edges[i], ews[i], weights[i])  # call the gcn module
+                x = x + self._ops[i](x, edge_index, ews[i], weights[i])  # call the gcn module
         return x
 
 class GassoSpace(ModelBase):
@@ -156,8 +164,6 @@ class GassoSpace(ModelBase):
         
         super().__init__()
         self.in_channels = in_channels
-        if out_channels is None:
-            out_channels = in_channels
         self.out_channels = out_channels
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
@@ -178,9 +184,56 @@ class GassoSpace(ModelBase):
             )
         else:
             self.head = None
+
+        # self.apply(self._init_weights_zero)
         self.build_graph() # build the graph for gnn modules
 
+
+    def _init_weights_zero(self, m):
+        """
+        将所有参数设置为 0，并强制关闭 Dropout
+        """
+        # 1. Linear
+        if isinstance(m, nn.Linear):
+            init.constant_(m.weight, 0)
+            if m.bias is not None:
+                init.constant_(m.bias, 0)
+                
+        # 2. Embedding
+        elif isinstance(m, nn.Embedding):
+            init.constant_(m.weight, 0)
+            
+        # 3. LayerNorm
+        elif isinstance(m, nn.LayerNorm):
+            init.constant_(m.weight, 0)
+            init.constant_(m.bias, 0)
+
+        # 4. GATConv (PyG)
+        elif isinstance(m, gnn.GATConv):
+            if hasattr(m, 'att_src') and m.att_src is not None:
+                init.constant_(m.att_src, 0)
+            if hasattr(m, 'att_dst') and m.att_dst is not None:
+                init.constant_(m.att_dst, 0)
+            if hasattr(m, 'att') and m.att is not None: # 兼容旧版
+                init.constant_(m.att, 0)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias, 0)
+            
+            # 【关键】GATConv 内部通常也包含 dropout 参数，需要手动设为 0
+            # 注意：这只修改了属性，GATConv 内部 forward 调用 F.dropout 时会用到这个属性
+            if hasattr(m, 'dropout'):
+                m.dropout = 0.0
+
+        # 5. Dropout 层 (单独定义的层)
+        elif isinstance(m, nn.Dropout):
+            # Dropout 没有 weight，只有一个 p (概率)
+            # 将其设为 0，意味着“丢弃 0% 的神经元”，即完全直通，消除随机性
+            m.p = 0.0
+
+    
     def build_graph(self):
+        # print(self.dropout)
+        # print("X"*100)
         self.cell = CellWS( # cell -> gnn module
             self.num_layers, self.in_channels, self.hidden_channels, self.out_channels, self.dropout, self.training
         )
@@ -188,22 +241,26 @@ class GassoSpace(ModelBase):
 
     # def forward(self, x, adjs):
     def forward(self, x, edge_index, edge_weight = None, is_search = True):
-        if self.step == 0:
+        if self.step <= 1:
             edge_index = edge_index.unsqueeze(0).repeat(self.num_layers, 1, 1)
             edge_weight = edge_weight.unsqueeze(0).repeat(self.num_layers, 1, 1)
             self.adjs = (edge_index, edge_weight)
             self.step += 1
+
             return None
         # print(self.adjs[0], self.adjs[1])
         # print(self.alphas_normal)
         # print("X"*100)
+        # print("x[0][0]:",x[0][0])
         self.step += 1
         if self.in_channels is not None:
             x = self.dropout(x)
             x = self.embed(x) * (self.hidden_channels ** 0.5)
+            # print(self.embed.weight)
         else:
             x = self.embed(x) * (self.hidden_channels ** 0.5)
             x = self.dropout(x)
+        # print("x[0][0]:",x[0][0])
         weights = []
         for j in range(self.num_layers):
             # print(self.alphas_normal[j])
@@ -214,10 +271,34 @@ class GassoSpace(ModelBase):
         else:
             weights_tensor = torch.stack(weights)
             weights_tensor = weights_tensor.detach()
+            
+            #select the operation with the highest weight
             index = torch.argmax(weights_tensor, dim=-1)
+            
+            # # select the operation with the highest weight, except the middle operation
+            # # 1. 使用 topk 获取每一行 "前两名" 的值和索引
+            # # k=2: 取前两个
+            # # dim=-1: 在最后一维（每一行）操作
+            # # largest=True: 从大到小排序
+            # top_values, top_indices = torch.topk(weights_tensor, k=2, dim=-1, largest=True)
+
+            # # top_indices 的 shape 是 (行数, 2)
+            # # 第 0 列是最大值的索引，第 1 列是第二大值的索引
+            # first_max_idx = top_indices[:, 0]  # 原来的 argmax 结果
+            # second_max_idx = top_indices[:, 1] # 第二大的索引
+
+            # # 2. 初始化你的 index 变量 (默认全是用最大值)
+            # index = first_max_idx.clone()
+            # n = weights_tensor.shape[0]
+            # mid = n // 2
+            # index[mid] = second_max_idx[mid]
+
             weights = [w.detach() for w in weights]
-            print("index", index)
-        x = self.cell(x, self.adjs, weights, index)
+            # print("weights", weights)
+            # print("index", index)
+        # print("weights", weights)
+        x = self.cell(x, self.adjs, edge_index, weights, index)
+        # print("x", x)
         ret = {'last_hidden_state': x}
         if self.head is not None:
             ret['output'] = self.head(x)
@@ -255,118 +336,6 @@ class GassoSpace(ModelBase):
         self.use_forward = False
         return self.wrap()
 
-
-
-class GATLayer(ModelBase):
-    def __init__(self, in_channels: int = 64,
-                 out_channels: Optional[int] = None,
-                 num_heads: int = 4, dropout: float = 0.1,
-                 d_feedforward: int = 128) -> None:
-        super().__init__()
-
-        if out_channels is None:
-            out_channels = in_channels
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.num_heads = num_heads
-        self.dropout = dropout
-        self.d_feedforward = d_feedforward
-
-        # TODO maybe use GATv2Conv?
-        self.conv = gnn.GATConv(in_channels, out_channels, heads=num_heads,
-                                dropout=dropout, concat=True)
-        self.linear1 = nn.Linear(out_channels * num_heads, d_feedforward)
-        self.linear2 = nn.Linear(d_feedforward, out_channels)
-
-        self.out_norm = nn.LayerNorm(out_channels)
-
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor
-               ) -> torch.Tensor:
-        x = self.conv(x, edge_index)
-        x = self.linear1(x)
-        x = F.gelu(x)
-        x = self.linear2(x)
-        x = self.out_norm(x)
-
-        return x
-
-
-class GATMod(ModelBase):
-    def __init__(self,
-        in_channels: Optional[int] = None,
-        num_nodes: Optional[int] = None,
-
-        hidden_channels: int = 64,
-        num_heads: int = 4,
-        num_layers: int = 4,
-        dropout: float = 0.1,
-        d_feedforward: int = 128,
-
-        out_channels: Optional[int] = None,
-    ) -> None:
-        assert num_layers >= 1
-        assert in_channels is not None or num_nodes is not None
-        assert in_channels is None or num_nodes is None
-
-        super().__init__()
-
-        self.in_channels = in_channels
-        self.num_nodes = num_nodes
-        self.hidden_channels = hidden_channels
-        self.num_heads = num_heads
-        self.num_layers = num_layers
-        self.d_feedforward = d_feedforward
-        self.out_channels = out_channels
-
-        self.dropout = nn.Dropout(dropout)
-
-        if self.in_channels is not None:
-            self.embed = nn.Linear(self.in_channels, self.hidden_channels)
-        else:  # self.num_nodes is not None
-            self.embed = nn.Embedding(self.num_nodes, self.hidden_channels)
-
-        self.layers = nn.ModuleList()
-        for i in range(num_layers):
-            self.layers += [
-                GATLayer(hidden_channels, hidden_channels, num_heads,
-                         dropout=dropout, d_feedforward=d_feedforward)
-            ]
-
-        if self.out_channels is not None:
-            self.head = nn.Sequential(
-                nn.LayerNorm(self.hidden_channels),
-                nn.GELU(),
-                nn.Linear(self.hidden_channels, self.out_channels)
-            )
-        else:
-            self.head = None
-
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor
-               ) -> torch.Tensor:
-        if self.num_nodes is not None:  # these are node IDs
-            x = x.squeeze(-1)
-        assert len(x.shape) == 2 if self.in_channels is not None else 1
-
-        # dropout as early as possible: on the input data if we can, otherwise
-        # on the embeddings
-        if self.in_channels is not None:
-            x = self.dropout(x)
-            x = self.embed(x) * (self.hidden_channels ** 0.5)
-        else:
-            x = self.embed(x) * (self.hidden_channels ** 0.5)
-            x = self.dropout(x)
-
-        for i, layer in enumerate(self.layers):
-            x = x + layer(x, edge_index)
-
-        ret = {'last_hidden_state': x}
-        if self.head is not None:
-            ret['output'] = self.head(x)
-        else:
-            ret['output'] = None
-
-        return ret
 
 
 #
@@ -603,8 +572,9 @@ class ClipGraph(ModelBase):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_attr: Optional[torch.Tensor] = None,
+        is_search: bool = True,
     ) -> torch.Tensor:
-        embeds = self.gnn(x, edge_index, edge_attr)
+        embeds = self.gnn(x, edge_index, edge_attr, is_search)
         if(self.gnn.step == 1):
             return embeds
         if embeds['output'] is not None:
@@ -623,7 +593,7 @@ class ClipGraph(ModelBase):
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor,
                 graph_x: torch.Tensor, graph_edge_index: torch.Tensor, graph_edge_attr: torch.Tensor,
-                node_index: torch.Tensor) -> torch.Tensor:
+                node_index: torch.Tensor, is_search: bool = True) -> torch.Tensor:
         if self.debug_checks:
             assert not torch.isinf(input_ids).any().item()
             assert not torch.isnan(input_ids).any().item()
@@ -648,7 +618,7 @@ class ClipGraph(ModelBase):
             assert not torch.isinf(lm_embeds).any().item()
             assert not torch.isnan(lm_embeds).any().item()
 
-        gnn_embeds = self.embed_nodes(graph_x, graph_edge_index, graph_edge_attr)
+        gnn_embeds = self.embed_nodes(graph_x, graph_edge_index, graph_edge_attr, is_search)
         if(self.gnn.step == 1):
             return None
         gnn_embeds = F.normalize(gnn_embeds, p=2, dim=1)

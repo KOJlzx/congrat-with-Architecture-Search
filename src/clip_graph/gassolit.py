@@ -91,15 +91,15 @@ class LitGAE(LitBase):
         is_search: bool = True
     ) -> torch.Tensor:
 
-        if(self.epoch > 26):
-            is_search = False
+        # if(self.epoch > 20):
+        #     is_search = False
         print("epoch", self.epoch)
         print("is_search", is_search)
         out = self.model.encoder(x, edge_index, edge_weight, is_search)
         self.epoch += 1
         # print("step", self.model.encoder.step)
         # print("f" * 100)
-        if (self.model.encoder.step == 1):
+        if (self.model.encoder.step <= 2):
             return out
         if isinstance(out, torch.Tensor):
             pass
@@ -116,8 +116,8 @@ class LitGAE(LitBase):
         batch: Dict[str, Any],
         outputs: LitGAEOutput,
     ) -> torch.Tensor:
-        if(self.model.encoder.step == 1):
-            return outputs.z.sum() * 0.0
+        if(self.model.encoder.step <= 2):
+            return None
         return self.model.recon_loss(
             outputs.z,
             batch['graph_edge_index'],
@@ -134,7 +134,8 @@ class LitGAE(LitBase):
 
         
         outputs = self(x, batch['graph_edge_index'], batch['graph_edge_attr'])
-        if(self.model.encoder.step == 1):
+        print("___", split)
+        if(self.model.encoder.step <= 2):
             return None
         loss = self.loss(batch, outputs)
 
@@ -340,7 +341,7 @@ class LitClipGraph(LitBase):
         self.lm_layernorm_eps = lm_layernorm_eps
         self.cycle_length_steps = cycle_length_steps
         self.debug_checks = debug_checks
-
+        self.train_step = 0
         sim_weight_options = ['identity', 'exp', 'exp_thick_tail']
         if self.sim_weights is not None and self.sim_weights not in sim_weight_options:
             raise ValueError(f'Invalid sim_weights option: {self.sim_weights}')
@@ -393,19 +394,26 @@ class LitClipGraph(LitBase):
         graph_edge_attr: torch.Tensor,
         graph_node_ids: torch.Tensor,
         text_node_ids: torch.Tensor,
+        is_search: bool = True,
     ) -> torch.Tensor:
         node_index = (graph_node_ids == text_node_ids[:, None])
         node_index = node_index.nonzero()[:, 1]
-
+        if self.train_step > 10:
+            is_search = False
+            print("in not search phase")
+        # is_search = False
         return self.model(
             input_ids = input_ids,
             attention_mask = attention_mask,
             graph_x = graph_x,
             graph_edge_index = graph_edge_index,
             graph_edge_attr = graph_edge_attr,
-            node_index = node_index
+            node_index = node_index, 
+            is_search = is_search
         )
+        self.train_step += 1
 
+        
     def step(self,
         batch: Dict[str, Any],
         batch_idx: int,
@@ -440,7 +448,8 @@ class LitClipGraph(LitBase):
             text_node_ids = batch['text_node_ids'],
         )
         if(self.model.gnn.step == 1):
-            return None
+            zero_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            return zero_loss
         # print(batch['text_node_ids'], batch['graph_node_ids']) 
         #([17145742, 12651051,  9787347, 12513038], device='cuda:0')
         # print(logits.shape)

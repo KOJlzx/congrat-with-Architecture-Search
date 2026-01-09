@@ -6,6 +6,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.init as init
 
 import torch_geometric.nn as gnn
 
@@ -17,6 +18,19 @@ from .gassomodels import GassoSpace
 #
 # Base classes
 #
+def _init_weights_zero(self, m):
+    """
+    将所有 Linear, Embedding, LayerNorm 的参数设置为 0
+    """
+    if isinstance(m, nn.Linear):
+        init.constant_(m.weight, 0)
+        if m.bias is not None:
+            init.constant_(m.bias, 0)
+    elif isinstance(m, nn.Embedding):
+        init.constant_(m.weight, 0)
+    elif isinstance(m, nn.LayerNorm):
+        init.constant_(m.weight, 0) # 注意：正常训练时这里应该是 1
+        init.constant_(m.bias, 0)
 
 
 class ModelBase(nn.Module):
@@ -48,19 +62,21 @@ class GATLayer(ModelBase):
         self.d_feedforward = d_feedforward
 
         # TODO maybe use GATv2Conv?
-        self.conv = gnn.GATConv(in_channels, out_channels, heads=num_heads,
-                                dropout=dropout, concat=True)
-        self.linear1 = nn.Linear(out_channels * num_heads, d_feedforward)
-        self.linear2 = nn.Linear(d_feedforward, out_channels)
+        self.conv = gnn.GATConv(in_channels, out_channels)
+        #               (out_channels * num_heads, d_feedforward)
+        # self.linear2 = nn.Linear(d_feedforward, out_channels)
 
         self.out_norm = nn.LayerNorm(out_channels)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor
                ) -> torch.Tensor:
+        # print(x.shape)
         x = self.conv(x, edge_index)
-        x = self.linear1(x)
-        x = F.gelu(x)
-        x = self.linear2(x)
+        # print(x.shape)
+        # print("_"*100)
+        # x = self.linear1(x)
+        # x = F.gelu(x)
+        # x = self.linear2(x)
         x = self.out_norm(x)
 
         return x
@@ -99,7 +115,7 @@ class GATMod(ModelBase):
             self.embed = nn.Linear(self.in_channels, self.hidden_channels)
         else:  # self.num_nodes is not None
             self.embed = nn.Embedding(self.num_nodes, self.hidden_channels)
-
+        # init.constant_(self.embed.weight, 0)
         self.layers = nn.ModuleList()
         for i in range(num_layers):
             self.layers += [
@@ -116,25 +132,66 @@ class GATMod(ModelBase):
         else:
             self.head = None
 
+        # self.apply(self._init_weights_zero)
+        # print("in_init_weights_zero", self.embed.weight)
+
+
+    def _init_weights_zero(self, m):
+        """
+        将所有参数设置为 0，并强制关闭 Dropout
+        """
+        # 1. Linear
+        if isinstance(m, nn.Linear):
+            init.constant_(m.weight, 0)
+            if m.bias is not None:
+                init.constant_(m.bias, 0)
+                
+        # 2. Embedding
+        elif isinstance(m, nn.Embedding):
+            init.constant_(m.weight, 0)
+            
+        # 3. LayerNorm
+        elif isinstance(m, nn.LayerNorm):
+            init.constant_(m.weight, 0)
+            init.constant_(m.bias, 0)
+
+        # 4. GATConv (PyG)
+        elif isinstance(m, gnn.GATConv):
+            if hasattr(m, 'att_src') and m.att_src is not None:
+                init.constant_(m.att_src, 0)
+            if hasattr(m, 'att_dst') and m.att_dst is not None:
+                init.constant_(m.att_dst, 0)
+            if hasattr(m, 'att') and m.att is not None: # 兼容旧版
+                init.constant_(m.att, 0)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias, 0)
+            
+            # 【关键】GATConv 内部通常也包含 dropout 参数，需要手动设为 0
+            # 注意：这只修改了属性，GATConv 内部 forward 调用 F.dropout 时会用到这个属性
+            if hasattr(m, 'dropout'):
+                m.dropout = 0.0
+
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor
                ) -> torch.Tensor:
         if self.num_nodes is not None:  # these are node IDs
             x = x.squeeze(-1)
         assert len(x.shape) == 2 if self.in_channels is not None else 1
-
+        # print("x[0][0]:",x[0][0])
         # dropout as early as possible: on the input data if we can, otherwise
         # on the embeddings
         if self.in_channels is not None:
             x = self.dropout(x)
             x = self.embed(x) * (self.hidden_channels ** 0.5)
+            # print(self.embed.weight)
         else:
             x = self.embed(x) * (self.hidden_channels ** 0.5)
             x = self.dropout(x)
-
+        # print("x[0][0]:",x[0][0])
         for i, layer in enumerate(self.layers):
             x = x + layer(x, edge_index)
 
         ret = {'last_hidden_state': x}
+        print("X"*100)
         if self.head is not None:
             ret['output'] = self.head(x)
         else:

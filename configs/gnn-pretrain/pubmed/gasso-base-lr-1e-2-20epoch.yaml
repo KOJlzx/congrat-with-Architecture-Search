@@ -21,7 +21,7 @@ model:
         model_class_name: 'GassoSpace'
         model_params:
             in_channels: 768  # input feature vector dims, inductive or transductive
-
+            out_channels: 768
             # this goes with transductive_identity_features above: if that's
             # set to true, the idea is that each node's feature is just its
             # index, and we learn an arbitrary embedding for each node in the
@@ -34,6 +34,7 @@ model:
             dropout: 0.3
             training: true
             ops: ['gat', 'gcn', 'gin', 'sage', 'linear']
+            # ops: ['gat']
 
         lr: 1.0e-2
         weight_decay: 0.0
@@ -97,7 +98,7 @@ trainer:
     #
 
     max_epochs: 100
-    min_epochs: 17
+    min_epochs: 20
 
     limit_train_batches: 1
     limit_val_batches: 1

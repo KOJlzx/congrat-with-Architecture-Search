@@ -21,7 +21,7 @@ import pytorch_lightning as pl
 
 from . import losses as ls
 from . import optimizers as op
-from . import gassomodels as md
+from . import models as md
 from . import utils as ut
 
 
@@ -197,6 +197,8 @@ class LitGAE(LitBase):
         x = x.float()
 
         outputs = self(x, batch['graph_edge_index'])
+
+        print(split)
         loss = self.loss(batch, outputs)
 
         auc, ap = self.model.test(

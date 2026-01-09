@@ -242,7 +242,7 @@ class GraphDataModule(BaseDataModule):
         print('in_get_graph_object')
         with open(self._graph_data_cache_path, 'rb') as f:
             ret = pickle.load(f)
-        print('in_get_graph_object_pickle_load')
+        # print('in_get_graph_object_pickle_load')
         if not self.directed:
             if hasattr(ret, 'num_nodes'):
                 num_nodes = ret.num_nodes

@@ -20,5 +20,7 @@
 #     --master_port 29501 \
 #     bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/base.yaml"; \
 
+python  bin/trainer.py fit -c "configs/gnn-pretrain/pubmed/gasso-base-lr-1e-2-20epoch.yaml";
+# python  bin/trainer.py fit -c "configs/gnn-pretrain/pubmed/base-lr-1e-2-20epoch.yaml";  
+# python bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/base.yaml"
 # python  bin/trainer.py fit -c "configs/clip-graph/inductive-causal/pubmed/gassobase.yaml"; 
-python  bin/trainer.py fit -c "configs/gnn-pretrain/pubmed/gasso-base-lr-1e-2-20epoch.yaml"; 
